@@ -1,0 +1,9 @@
+node_modules/
+.wrangler/
+.dev.vars
+.DS_Store
+.claude/
+design.md
+SETUP-GUIDE.md
+seed/active.json
+wrangler.toml

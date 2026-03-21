@@ -1,0 +1,47 @@
+# Human-edited only. AI clients cannot write to this layer.
+# This is a TEMPLATE — edit with your real data in your private data repo.
+# See README.md "Update core" section for how to deploy changes.
+
+identity:
+  name: Your Name
+  name_reading: Name Reading
+  degrees:
+    - Your Degree, Your University
+  conviction: your core conviction
+  fragrance: your favorite fragrance
+
+ontology:
+  ddl:
+    name: Design-Doc Loop
+    phases: [Draft, Realize, Reflect]
+    principle: "shared document as extension of cognition"
+  pq:
+    name: "P(Q)"
+    definition: "LLM output quality as probability function of input quality"
+  design_by_contract:
+    application: organizational capability access
+    pattern: "preconditions, postconditions, invariants"
+  water_channel:
+    principle: "design conditions through which things flow, don't control agents"
+
+communication:
+  # Per-person rules (examples)
+  alice_style_note: "processes instantly, delegates via short emails, wants outcomes"
+  bob_rule: "2-line maximum replies"
+  carol_format: "lookup-table, not story-arc"
+
+  # Global output rules — all AI platforms must follow
+  global:
+    banned_phrases:
+      - "in summary"
+      - "let me know if"
+      - "feel free to"
+      - "I hope this helps"
+    banned_patterns:
+      - "trailing suggestion prompts at end of response"
+      - "rephrasing what the user just said back to them"
+      - "verbose preambles before the actual answer"
+    principle: >
+      Responses are self-contained. No trailing prompts, summaries, or suggestions.
+      Do not repeat what is already clear from context.
+      Conclusion first, then evidence. Minimum words. Compression is a virtue.
