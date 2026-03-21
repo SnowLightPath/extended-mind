@@ -171,12 +171,13 @@ function extractInstructions(coreText) {
     } else if (current === 'shape' || current === 'integrity' || current === 'intellectual') {
       if (trimmed.startsWith('- ')) {
         let text = trimmed.slice(2).trim();
-        if (text.startsWith('>')) text = text.slice(1).trim();
-        if (text) data[current].push(text);
+        if (text === '>' || text === '|') text = '';
+        else if (text.startsWith('>')) text = text.slice(1).trim();
+        data[current].push(text);
       } else if (indent > currentIndent + 2) {
         const last = data[current];
         if (last.length > 0) {
-          last[last.length - 1] += ' ' + trimmed;
+          last[last.length - 1] += (last[last.length - 1] ? ' ' : '') + trimmed;
         }
       }
     }
@@ -202,22 +203,33 @@ function extractInstructions(coreText) {
     output.push('');
   }
 
+  const renderItems = (arr) => arr.map((s) => s.trim()).filter(Boolean);
+
   if (data.shape.length > 0) {
-    output.push('## Output shape — every response MUST satisfy ALL of these:');
-    for (let i = 0; i < data.shape.length; i++) output.push(`${i + 1}. ${data.shape[i]}`);
-    output.push('');
+    const items = renderItems(data.shape);
+    if (items.length > 0) {
+      output.push('## Output shape — every response MUST satisfy ALL of these:');
+      for (let i = 0; i < items.length; i++) output.push(`${i + 1}. ${items[i]}`);
+      output.push('');
+    }
   }
 
   if (data.integrity.length > 0) {
-    output.push('## Integrity — NEVER violate these:');
-    for (let i = 0; i < data.integrity.length; i++) output.push(`${i + 1}. ${data.integrity[i]}`);
-    output.push('');
+    const items = renderItems(data.integrity);
+    if (items.length > 0) {
+      output.push('## Integrity — NEVER violate these:');
+      for (let i = 0; i < items.length; i++) output.push(`${i + 1}. ${items[i]}`);
+      output.push('');
+    }
   }
 
   if (data.intellectual.length > 0) {
-    output.push('## Intellectual standards:');
-    for (let i = 0; i < data.intellectual.length; i++) output.push(`${i + 1}. ${data.intellectual[i]}`);
-    output.push('');
+    const items = renderItems(data.intellectual);
+    if (items.length > 0) {
+      output.push('## Intellectual standards:');
+      for (let i = 0; i < items.length; i++) output.push(`${i + 1}. ${items[i]}`);
+      output.push('');
+    }
   }
 
   return output.join('\n');
