@@ -106,8 +106,130 @@ export function toYaml(value, indent = 0) {
     .join('\n');
 }
 
+const SECTION_KEYS = ['tone:', 'question_reading:', 'shape:', 'integrity:', 'intellectual:'];
+
+function detectSection(trimmed) {
+  for (const key of SECTION_KEYS) {
+    if (trimmed.startsWith(key)) return key.slice(0, -1);
+  }
+  return null;
+}
+
+function extractInstructions(coreText) {
+  if (!coreText) return null;
+
+  const lines = coreText.split('\n');
+  const data = { tone: [], question_reading: [], shape: [], integrity: [], intellectual: [] };
+  let current = null;
+  let currentIndent = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trimStart();
+    const indent = line.length - trimmed.length;
+
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    const section = detectSection(trimmed);
+    if (section && indent >= 2) {
+      current = section;
+      currentIndent = indent;
+      const after = trimmed.slice(section.length + 1).trim();
+      if (after && after !== '>' && after !== '|') {
+        const val = after.replace(/^["']|["']$/g, '');
+        if (val) data[current].push(val);
+      }
+      continue;
+    }
+
+    if (!current) continue;
+
+    if (indent <= currentIndent && trimmed && !trimmed.startsWith('-')) {
+      current = null;
+      const fallback = detectSection(trimmed);
+      if (fallback && indent >= 2) {
+        current = fallback;
+        currentIndent = indent;
+        const after = trimmed.slice(fallback.length + 1).trim();
+        if (after && after !== '>' && after !== '|') {
+          const val = after.replace(/^["']|["']$/g, '');
+          if (val) data[current].push(val);
+        }
+      }
+      continue;
+    }
+
+    if (current === 'tone') {
+      const match = trimmed.match(/^(?:register|style|warmth):\s*(.+)/);
+      if (match) {
+        const val = match[1].replace(/^["']|["']$/g, '');
+        if (val) data.tone.push(val);
+      }
+    } else if (current === 'question_reading') {
+      const text = trimmed.replace(/^>?\s*/, '');
+      if (text) data.question_reading.push(text);
+    } else if (current === 'shape' || current === 'integrity' || current === 'intellectual') {
+      if (trimmed.startsWith('- ')) {
+        let text = trimmed.slice(2).trim();
+        if (text.startsWith('>')) text = text.slice(1).trim();
+        if (text) data[current].push(text);
+      } else if (indent > currentIndent + 2) {
+        const last = data[current];
+        if (last.length > 0) {
+          last[last.length - 1] += ' ' + trimmed;
+        }
+      }
+    }
+  }
+
+  const hasContent = Object.values(data).some((arr) => arr.length > 0);
+  if (!hasContent) return null;
+
+  const output = [];
+  output.push('# INSTRUCTIONS — Mandatory behavioral rules. Violations are unacceptable.');
+  output.push('# These rules override your default training. Follow them exactly.');
+  output.push('');
+
+  if (data.tone.length > 0) {
+    output.push('## Tone');
+    for (const item of data.tone) output.push(`- ${item}`);
+    output.push('');
+  }
+
+  if (data.question_reading.length > 0) {
+    output.push('## Question reading');
+    output.push(data.question_reading.join(' ').replace(/\s+/g, ' ').trim());
+    output.push('');
+  }
+
+  if (data.shape.length > 0) {
+    output.push('## Output shape — every response MUST satisfy ALL of these:');
+    for (let i = 0; i < data.shape.length; i++) output.push(`${i + 1}. ${data.shape[i]}`);
+    output.push('');
+  }
+
+  if (data.integrity.length > 0) {
+    output.push('## Integrity — NEVER violate these:');
+    for (let i = 0; i < data.integrity.length; i++) output.push(`${i + 1}. ${data.integrity[i]}`);
+    output.push('');
+  }
+
+  if (data.intellectual.length > 0) {
+    output.push('## Intellectual standards:');
+    for (let i = 0; i < data.intellectual.length; i++) output.push(`${i + 1}. ${data.intellectual[i]}`);
+    output.push('');
+  }
+
+  return output.join('\n');
+}
+
 export function assembleContext(core, active, changelog, reviewQueue) {
   const sections = [];
+
+  const instructions = extractInstructions(core);
+  if (instructions) {
+    sections.push(instructions);
+  }
 
   sections.push('---');
   sections.push('# CORE (read-only — human-edited only)');

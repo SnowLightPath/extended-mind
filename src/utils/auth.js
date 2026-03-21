@@ -12,8 +12,13 @@ export async function authenticateWithOAuth(request, env) {
 
   const tokenRaw = await env.PCP.get(`oauth:token:${token}`);
   if (tokenRaw) {
-    const data = JSON.parse(tokenRaw);
-    return { ok: true, platform: data.platform };
+    try {
+      const data = JSON.parse(tokenRaw);
+      return { ok: true, platform: data.platform };
+    } catch {
+      console.error('Corrupt oauth token data in KV:', token.slice(0, 8) + '...');
+      return { ok: false };
+    }
   }
 
   return { ok: false };

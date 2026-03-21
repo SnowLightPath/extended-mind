@@ -71,32 +71,46 @@ export async function handleAuthorizeGet(url, env) {
     return html('<p>Error: response_type must be "code"</p>', 400);
   }
 
-  const clientRaw = await env.PCP.get(`oauth:client:${clientId}`);
-  if (!clientRaw) {
-    return html('<p>Error: Unknown client</p>', 400);
+  let client;
+  try {
+    const clientRaw = await env.PCP.get(`oauth:client:${clientId}`);
+    if (!clientRaw) {
+      return html('<p>Error: Invalid request</p>', 400);
+    }
+    client = JSON.parse(clientRaw);
+  } catch {
+    return html('<p>Error: Invalid request</p>', 400);
   }
 
-  const client = JSON.parse(clientRaw);
   if (!client.redirect_uris.includes(redirectUri)) {
-    return html('<p>Error: Invalid redirect URI</p>', 400);
+    return html('<p>Error: Invalid request</p>', 400);
   }
 
   return authorizePage(client.name, clientId, redirectUri, state);
 }
 
 export async function handleAuthorizePost(request, env) {
-  const form = await request.formData();
+  let form;
+  try {
+    form = await request.formData();
+  } catch {
+    return html('<p>Error: Invalid request</p>', 400);
+  }
   const token = form.get('token');
   const clientId = form.get('client_id');
   const redirectUri = form.get('redirect_uri');
   const state = form.get('state');
 
-  const clientRaw = await env.PCP.get(`oauth:client:${clientId}`);
-  if (!clientRaw) {
-    return html('<p>Error: Unknown client</p>', 400);
+  let client;
+  try {
+    const clientRaw = await env.PCP.get(`oauth:client:${clientId}`);
+    if (!clientRaw) {
+      return html('<p>Error: Invalid request</p>', 400);
+    }
+    client = JSON.parse(clientRaw);
+  } catch {
+    return html('<p>Error: Invalid request</p>', 400);
   }
-
-  const client = JSON.parse(clientRaw);
 
   if (token !== env.PCP_TOKEN) {
     return authorizePage(client.name, clientId, redirectUri, state, 'Invalid token — please try again');
@@ -120,13 +134,17 @@ export async function handleToken(request, env) {
   const contentType = request.headers.get('content-type') || '';
   let params;
 
-  if (contentType.includes('application/x-www-form-urlencoded')) {
-    const form = await request.formData();
-    params = Object.fromEntries(form.entries());
-  } else if (contentType.includes('application/json')) {
-    params = await request.json();
-  } else {
-    return oauthError('invalid_request', 'Unsupported content type');
+  try {
+    if (contentType.includes('application/x-www-form-urlencoded')) {
+      const form = await request.formData();
+      params = Object.fromEntries(form.entries());
+    } else if (contentType.includes('application/json')) {
+      params = await request.json();
+    } else {
+      return oauthError('invalid_request', 'Unsupported content type');
+    }
+  } catch {
+    return oauthError('invalid_request', 'Malformed request body');
   }
 
   const { grant_type, code, client_id, client_secret, redirect_uri } = params;
@@ -135,14 +153,19 @@ export async function handleToken(request, env) {
     return oauthError('unsupported_grant_type', 'Only authorization_code is supported');
   }
 
-  const clientRaw = await env.PCP.get(`oauth:client:${client_id}`);
-  if (!clientRaw) {
-    return oauthError('invalid_client', 'Unknown client', 401);
+  let client;
+  try {
+    const clientRaw = await env.PCP.get(`oauth:client:${client_id}`);
+    if (!clientRaw) {
+      return oauthError('invalid_client', 'Authentication failed', 401);
+    }
+    client = JSON.parse(clientRaw);
+  } catch {
+    return oauthError('invalid_client', 'Authentication failed', 401);
   }
 
-  const client = JSON.parse(clientRaw);
   if (client.client_secret !== client_secret) {
-    return oauthError('invalid_client', 'Invalid client credentials', 401);
+    return oauthError('invalid_client', 'Authentication failed', 401);
   }
 
   const codeRaw = await env.PCP.get(`oauth:code:${code}`);
@@ -150,12 +173,18 @@ export async function handleToken(request, env) {
     return oauthError('invalid_grant', 'Authorization code expired or invalid');
   }
 
-  const codeData = JSON.parse(codeRaw);
+  await env.PCP.delete(`oauth:code:${code}`);
+
+  let codeData;
+  try {
+    codeData = JSON.parse(codeRaw);
+  } catch {
+    return oauthError('invalid_grant', 'Authorization code expired or invalid');
+  }
+
   if (codeData.client_id !== client_id || codeData.redirect_uri !== redirect_uri) {
     return oauthError('invalid_grant', 'Code does not match client or redirect_uri');
   }
-
-  await env.PCP.delete(`oauth:code:${code}`);
 
   const accessToken = `pcp_oauth_${randomHex(32)}`;
   await env.PCP.put(

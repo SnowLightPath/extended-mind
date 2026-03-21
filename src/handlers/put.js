@@ -88,17 +88,22 @@ async function classifyAndUpdate(env, message, timestamp, platform) {
 
     const result = await classifyMessage(env, message, active);
 
+    // D6 fix: Re-read active to get latest state after Claude API call (~2s).
+    // Merge only classify-owned fields to avoid overwriting concurrent put() sessions.
+    const freshRaw = await env.PCP.get('active');
+    const fresh = JSON.parse(freshRaw || '{}');
+
     if (result.top_of_mind && result.top_of_mind.length > 0) {
-      active.top_of_mind = result.top_of_mind;
+      fresh.top_of_mind = result.top_of_mind;
     }
 
     if (result.active_updates && result.active_updates.length > 0) {
       for (const update of result.active_updates) {
-        applyUpdate(active, update.path, update.value);
+        applyUpdate(fresh, update.path, update.value);
       }
     }
 
-    await env.PCP.put('active', JSON.stringify(active));
+    await env.PCP.put('active', JSON.stringify(fresh));
 
     if (result.contradictions && result.contradictions.length > 0) {
       const queueRaw = await env.PCP.get('review_queue');

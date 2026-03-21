@@ -49,10 +49,10 @@ export default {
       });
     }
 
-    // Webhook (no auth required — GitHub push events)
+    // Webhook (signature-verified when WEBHOOK_SECRET is set)
     if (url.pathname === '/webhook' && request.method === 'POST') {
       const { handleWebhook } = await import('./handlers/webhook.js');
-      return handleWebhook(request, env);
+      return handleWebhook(request, env, ctx);
     }
 
     // OAuth discovery (no auth required)

@@ -71,9 +71,10 @@ npx wrangler kv namespace create PCP
 # → Copy the ID into wrangler.toml
 
 # Set secrets
-npx wrangler secret put PCP_TOKEN       # your bearer token (generate any 64-char hex)
-npx wrangler secret put GITHUB_TOKEN    # GitHub PAT with repo scope
+npx wrangler secret put PCP_TOKEN         # your bearer token (generate any 64-char hex)
+npx wrangler secret put GITHUB_TOKEN      # GitHub PAT with repo scope
 npx wrangler secret put ANTHROPIC_API_KEY
+npx wrangler secret put WEBHOOK_SECRET    # GitHub webhook HMAC-SHA256 secret
 
 # Configure wrangler.toml
 # - Set KV namespace ID
@@ -108,7 +109,7 @@ This writes 4 KV keys (`core`, `active`, `changelog`, `review_queue`). **Initial
 
 ### 4. Update core
 
-Core is the human-owned layer — identity, ontology, communication rules. AI clients cannot write to it.
+Core is the human-owned layer — identity, ontology, interaction rules. AI clients cannot write to it.
 
 ```bash
 # Edit seed/core.yaml, then:
@@ -195,7 +196,7 @@ curl -s -X POST https://your-worker.workers.dev/mcp \
 
 | Layer | What | Who edits | How |
 |-------|------|-----------|-----|
-| **🔒 Core** | Identity, ontology, communication rules | You only | Edit `seed/core.yaml` → git push → webhook → KV |
+| **🔒 Core** | Identity, ontology, interaction rules | You only | Edit `seed/core.yaml` → git push → webhook → KV |
 | **📝 Active** | Team, projects, priorities, recent sessions | AI clients | `context_log()` → KV + GitHub + classification |
 
 When an AI calls `context_log`:

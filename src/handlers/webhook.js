@@ -1,5 +1,26 @@
-export async function handleWebhook(request, env) {
-  const payload = await request.json();
+async function verifySignature(secret, body, signature) {
+  if (!signature) return false;
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body));
+  const expected =
+    'sha256=' +
+    Array.from(new Uint8Array(sig), (b) => b.toString(16).padStart(2, '0')).join('');
+
+  if (signature.length !== expected.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < expected.length; i++) {
+    mismatch |= signature.charCodeAt(i) ^ expected.charCodeAt(i);
+  }
+  return mismatch === 0;
+}
+
+async function processWebhook(payload, env) {
   const commits = payload.commits || [];
   const changedFiles = commits.flatMap((c) => [...(c.added || []), ...(c.modified || [])]);
   const sourceRepo = payload.repository?.full_name;
@@ -28,7 +49,38 @@ export async function handleWebhook(request, env) {
   }
 
   console.log('Webhook:', results.length > 0 ? results.join(', ') : 'no relevant changes');
-  return new Response(JSON.stringify({ ok: true, synced: results }), {
+  return results;
+}
+
+export async function handleWebhook(request, env, ctx) {
+  const body = await request.text();
+
+  if (env.WEBHOOK_SECRET) {
+    const signature = request.headers.get('x-hub-signature-256');
+    const valid = await verifySignature(env.WEBHOOK_SECRET, body, signature);
+    if (!valid) {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+  } else {
+    console.warn('WEBHOOK_SECRET not configured — accepting unverified webhook');
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    return new Response(JSON.stringify({ error: 'Invalid JSON' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  ctx.waitUntil(processWebhook(payload, env));
+
+  return new Response(JSON.stringify({ ok: true }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   });
