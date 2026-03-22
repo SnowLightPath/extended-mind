@@ -253,6 +253,21 @@ export async function handleRegisterVerify(request, env) {
     return jsonResponse({ ok: true, credential_id: registrationInfo.credential.id });
   }
 
+  // Re-validate redirect_uri against registered client
+  if (challengeData.client_id) {
+    try {
+      const clientRaw = await env.PCP.get(`oauth:client:${challengeData.client_id}`);
+      if (clientRaw) {
+        const client = JSON.parse(clientRaw);
+        if (!client.redirect_uris.includes(challengeData.redirect_uri)) {
+          return jsonResponse({ error: 'Invalid redirect_uri' }, 400);
+        }
+      }
+    } catch { /* client lookup failed — reject */
+      return jsonResponse({ error: 'Invalid client' }, 400);
+    }
+  }
+
   const code = randomHex(32);
   await env.PCP.put(
     `oauth:code:${code}`,
@@ -319,6 +334,21 @@ export async function handleAuthVerify(request, env) {
     JSON.stringify({ ...credentialData, counter: authInfo.counter }),
   );
 
+  // Re-validate redirect_uri against registered client
+  if (challengeData.client_id && challengeData.redirect_uri) {
+    try {
+      const clientRaw = await env.PCP.get(`oauth:client:${challengeData.client_id}`);
+      if (clientRaw) {
+        const client = JSON.parse(clientRaw);
+        if (!client.redirect_uris.includes(challengeData.redirect_uri)) {
+          return jsonResponse({ error: 'Invalid redirect_uri' }, 400);
+        }
+      }
+    } catch {
+      return jsonResponse({ error: 'Invalid client' }, 400);
+    }
+  }
+
   const code = randomHex(32);
   await env.PCP.put(
     `oauth:code:${code}`,
@@ -374,6 +404,21 @@ export async function handleSkip(request, env) {
   const csrfValid = await env.PCP.get(`csrf:${csrf_token}`);
   if (csrfValid === null) return jsonResponse({ error: 'Invalid CSRF token' }, 400);
   await env.PCP.delete(`csrf:${csrf_token}`);
+
+  // Re-validate redirect_uri against registered client
+  if (client_id && redirect_uri) {
+    try {
+      const clientRaw = await env.PCP.get(`oauth:client:${client_id}`);
+      if (clientRaw) {
+        const client = JSON.parse(clientRaw);
+        if (!client.redirect_uris.includes(redirect_uri)) {
+          return jsonResponse({ error: 'Invalid redirect_uri' }, 400);
+        }
+      }
+    } catch {
+      return jsonResponse({ error: 'Invalid client' }, 400);
+    }
+  }
 
   const code = randomHex(32);
   await env.PCP.put(

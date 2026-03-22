@@ -214,6 +214,10 @@ export async function handleAuthorizePost(request, env) {
     return html('<p>Error: Invalid request</p>', 400);
   }
 
+  if (!client.redirect_uris.includes(redirectUri)) {
+    return html('<p>Error: Invalid request</p>', 400);
+  }
+
   if (token !== env.PCP_TOKEN) {
     const newCsrf = randomHex(16);
     await env.PCP.put(`csrf:${newCsrf}`, '{}', { expirationTtl: CSRF_TTL });

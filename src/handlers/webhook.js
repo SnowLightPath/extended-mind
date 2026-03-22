@@ -25,6 +25,11 @@ async function processWebhook(payload, env) {
   const changedFiles = commits.flatMap((c) => [...(c.added || []), ...(c.modified || [])]);
   const sourceRepo = payload.repository?.full_name;
 
+  if (!sourceRepo || sourceRepo !== env.GITHUB_REPO) {
+    console.warn(`Webhook ignored: source repo "${sourceRepo}" does not match GITHUB_REPO "${env.GITHUB_REPO}"`);
+    return [];
+  }
+
   const results = [];
 
   if (changedFiles.includes('seed/core.yaml') && sourceRepo) {
