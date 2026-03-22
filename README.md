@@ -219,10 +219,6 @@ Extended Mind uses two repositories:
 
 Your personal context never touches the code repository.
 
-## 📖 Design
-
-See [`design.md`](design.md) for the full specification — principles, KV schema, classification logic, and API examples.
-
 ## ⚖️ License
 
 [MIT](LICENSE)
