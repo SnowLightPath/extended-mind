@@ -235,7 +235,7 @@ function extractInstructions(coreText) {
   return output.join('\n');
 }
 
-export function assembleContext(core, active, changelog, reviewQueue) {
+export function assembleContext(core, active, sessions, changelog, reviewQueue) {
   const sections = [];
 
   const instructions = extractInstructions(core);
@@ -260,7 +260,13 @@ export function assembleContext(core, active, changelog, reviewQueue) {
   sections.push('---');
   sections.push('# ACTIVE CONTEXT');
   if (active) {
-    sections.push(toYaml(JSON.parse(active)));
+    const activeObj = JSON.parse(active);
+    if (sessions) {
+      activeObj.sessions = JSON.parse(sessions);
+    } else if (!activeObj.sessions) {
+      activeObj.sessions = [];
+    }
+    sections.push(toYaml(activeObj));
   } else {
     sections.push('sessions: []');
   }

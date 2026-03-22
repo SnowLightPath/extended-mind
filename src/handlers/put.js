@@ -1,3 +1,5 @@
+import { invalidateCache } from '../utils/cache.js';
+
 const MAX_SESSIONS = 20;
 const MAX_CHANGELOG = 50;
 const MAX_MESSAGE_BYTES = 50 * 1024;
@@ -9,32 +11,47 @@ export async function handlePut(args, env, platform, ctx) {
     throw new Error('message must not be empty');
   }
 
-  if (new TextEncoder().encode(message).length > MAX_MESSAGE_BYTES) {
-    throw new Error('message exceeds 50KB limit');
+  if (message.length * 4 > MAX_MESSAGE_BYTES) {
+    if (new TextEncoder().encode(message).length > MAX_MESSAGE_BYTES) {
+      throw new Error('message exceeds 50KB limit');
+    }
   }
 
   const timestamp = new Date().toISOString();
-
-  const activeRaw = await env.PCP.get('active');
-  const active = activeRaw ? JSON.parse(activeRaw) : { sessions: [] };
-
-  if (!active.sessions) active.sessions = [];
-  active.sessions.push({ timestamp, platform, message });
-  if (active.sessions.length > MAX_SESSIONS) {
-    active.sessions = active.sessions.slice(-MAX_SESSIONS);
-  }
-
-  await env.PCP.put('active', JSON.stringify(active));
-
   const preview = message.length > 80 ? message.slice(0, 80) + '...' : message;
-  ctx.waitUntil(asyncPostProcess(env, message, timestamp, platform, preview));
+
+  ctx.waitUntil(asyncWriteAndProcess(env, message, timestamp, platform, preview));
 
   return {
     content: [{ type: 'text', text: `Stored. (${timestamp})` }],
   };
 }
 
-async function asyncPostProcess(env, message, timestamp, platform, preview) {
+async function asyncWriteAndProcess(env, message, timestamp, platform, preview) {
+  // Sessions write (separated from active)
+  let sessionsRaw = await env.PCP.get('sessions');
+  let sessions;
+
+  if (sessionsRaw === null) {
+    // Lazy migration: extract sessions from active
+    const activeRaw = await env.PCP.get('active');
+    const active = activeRaw ? JSON.parse(activeRaw) : {};
+    sessions = active.sessions || [];
+    if (active.sessions) {
+      delete active.sessions;
+      await env.PCP.put('active', JSON.stringify(active));
+    }
+  } else {
+    sessions = JSON.parse(sessionsRaw);
+  }
+
+  sessions.push({ timestamp, platform, message });
+  if (sessions.length > MAX_SESSIONS) {
+    sessions = sessions.slice(-MAX_SESSIONS);
+  }
+  await env.PCP.put('sessions', JSON.stringify(sessions));
+  await invalidateCache(env);
+
   await Promise.allSettled([
     updateChangelog(env, timestamp, preview),
     commitToGitHub(env, message, timestamp, platform),
@@ -50,6 +67,7 @@ async function updateChangelog(env, timestamp, preview) {
     changelog.length = MAX_CHANGELOG;
   }
   await env.PCP.put('changelog', JSON.stringify(changelog));
+  await invalidateCache(env);
 }
 
 async function commitToGitHub(env, message, timestamp, platform) {
@@ -65,9 +83,15 @@ async function commitToGitHub(env, message, timestamp, platform) {
       : `# Session: ${date} (${platform})\n${newEntry}`;
     await putFile(env, sessionPath, sessionContent, `log from ${platform} at ${timestamp}`);
 
-    const active = await env.PCP.get('active');
-    if (active) {
-      await putFile(env, 'active.json', active, `active context mirror from ${platform}`);
+    // GitHub mirror: reconstruct full active with sessions
+    const [activeRaw, sessionsRaw] = await Promise.all([
+      env.PCP.get('active'),
+      env.PCP.get('sessions'),
+    ]);
+    if (activeRaw) {
+      const active = JSON.parse(activeRaw);
+      active.sessions = sessionsRaw ? JSON.parse(sessionsRaw) : [];
+      await putFile(env, 'active.json', JSON.stringify(active, null, 2), `active context mirror from ${platform}`);
     }
 
     console.log('GitHub commit:', sessionPath);
@@ -85,8 +109,6 @@ async function classifyAndUpdate(env, message, timestamp, platform) {
 
     const result = await classifyMessage(env, message, active);
 
-    // D6 fix: Re-read active to get latest state after Claude API call (~2s).
-    // Merge only classify-owned fields to avoid overwriting concurrent put() sessions.
     const freshRaw = await env.PCP.get('active');
     const fresh = JSON.parse(freshRaw || '{}');
 
@@ -101,6 +123,7 @@ async function classifyAndUpdate(env, message, timestamp, platform) {
     }
 
     await env.PCP.put('active', JSON.stringify(fresh));
+    await invalidateCache(env);
 
     if (result.contradictions && result.contradictions.length > 0) {
       const queueRaw = await env.PCP.get('review_queue');
@@ -116,6 +139,7 @@ async function classifyAndUpdate(env, message, timestamp, platform) {
       }
       while (queue.length > 20) queue.shift();
       await env.PCP.put('review_queue', JSON.stringify(queue));
+      await invalidateCache(env);
     }
 
     console.log('Classification:', {
