@@ -221,6 +221,32 @@ When an AI calls `context_get`:
 - **Webhook Signature** — HMAC-SHA256 verification required (`WEBHOOK_SECRET`)
 - **Constant-time Comparison** — client secret verification resistant to timing attacks
 
+## 🔄 Development: Design-Doc Loop
+
+This project uses **[Design-Doc Loop (DDL)](https://github.com/SnowLightPath/DDL)** — a human-LLM collaborative development methodology where a living design document (`design.md`) serves as shared cognition between sessions.
+
+The name "Extended Mind" comes from the [Extended Mind thesis](https://doi.org/10.1093/analys/58.1.7) (Clark & Chalmers, 1998), which argues that cognitive processes extend beyond the brain into the environment. In DDL, `design.md` functions as Otto's notebook — an external artifact that is constitutive of the design process, not merely a record of it.
+
+**The loop:** Draft (experience first) → Realize (design → code) → Reflect (code → design)
+
+| Command | What it does |
+|---------|-------------|
+| `/draft` | Design the experience before writing code |
+| `/realize` | Implement what `design.md` describes |
+| `/reflect` | Detect drift between code and design, reconcile |
+| `/refactoring` | Audit code quality against detection targets |
+| `/docs` | Audit and fix documentation |
+| `/commit` | Verify, commit, push, deploy |
+
+Each command runs through phases with `+++DETECT` targets that catch violations automatically and `+++STOP` gates that require human approval before proceeding.
+
+> `design.md` is gitignored — it's working notes, not a deliverable. Code is the source of truth.
+
+### References
+
+- Clark, A. & Chalmers, D. (1998). "The Extended Mind." *Analysis*, 58(1), 7–19. [doi:10.1093/analys/58.1.7](https://doi.org/10.1093/analys/58.1.7)
+- [Design-Doc Loop (DDL)](https://github.com/SnowLightPath/DDL) — Human-LLM collaborative development methodology
+
 ## 🔀 Data Separation
 
 Extended Mind uses two repositories:
