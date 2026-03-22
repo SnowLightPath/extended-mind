@@ -114,7 +114,7 @@ Edit `seed/core.yaml` with your identity. Copy `seed/active.example.json` to `se
 node seed/seed-kv.js
 ```
 
-This writes 4 initial KV keys (`core`, `active`, `changelog`, `review_queue`). Additional keys (OAuth tokens, CSRF tokens, WebAuthn credentials) are created at runtime. **Initial setup only** — re-running resets everything and wipes the active context that AI clients have built up.
+This writes 4 initial KV keys (`core`, `active`, `changelog`, `review_queue`). Additional keys (OAuth tokens, auth sessions, WebAuthn credentials) are created at runtime. **Initial setup only** — re-running resets everything and wipes the active context that AI clients have built up.
 
 ### 4. Update core
 

@@ -23,3 +23,14 @@ export async function authenticateWithOAuth(request, env) {
 
   return { ok: false };
 }
+
+export async function getAuthSession(env, authSessionId) {
+  if (!authSessionId) return null;
+  const raw = await env.PCP.get(`auth:session:${authSessionId}`);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}

@@ -1,4 +1,5 @@
 import { server } from '@passwordless-id/webauthn';
+import { getAuthSession } from '../utils/auth.js';
 
 const CHALLENGE_TTL = 300;
 
@@ -13,16 +14,6 @@ function randomHex(bytes) {
   const buf = new Uint8Array(bytes);
   crypto.getRandomValues(buf);
   return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-function escapeHtml(str) {
-  if (!str) return '';
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#x27;');
 }
 
 function enrollPage(clientId, redirectUri, state, csrfToken) {
@@ -153,11 +144,21 @@ export async function handleRegisterBegin(request, env) {
     return jsonResponse({ error: 'Invalid JSON' }, 400);
   }
 
-  const { client_id, redirect_uri, state, csrf_token } = body;
-  if (!csrf_token) return jsonResponse({ error: 'Missing CSRF token' }, 400);
+  const { auth_session_id, csrf_token } = body;
 
-  const csrfValid = await env.PCP.get(`csrf:${csrf_token}`);
-  if (csrfValid === null) return jsonResponse({ error: 'Invalid CSRF token' }, 400);
+  // Auth session flow (from OAuth authorize page)
+  if (auth_session_id) {
+    const authSession = await getAuthSession(env, auth_session_id);
+    if (!authSession || authSession.csrf_token !== csrf_token) {
+      return jsonResponse({ error: 'Invalid auth session' }, 400);
+    }
+  } else if (csrf_token) {
+    // Standalone /passkey flow (uses csrf: key)
+    const csrfValid = await env.PCP.get(`csrf:${csrf_token}`);
+    if (csrfValid === null) return jsonResponse({ error: 'Invalid CSRF token' }, 400);
+  } else {
+    return jsonResponse({ error: 'Missing authentication' }, 400);
+  }
 
   const url = new URL(request.url);
   const rpId = url.hostname;
@@ -166,7 +167,7 @@ export async function handleRegisterBegin(request, env) {
 
   await env.PCP.put(
     `webauthn:challenge:${challengeId}`,
-    JSON.stringify({ challenge, type: 'register', client_id, redirect_uri, state }),
+    JSON.stringify({ challenge, type: 'register', auth_session_id: auth_session_id || null }),
     { expirationTtl: CHALLENGE_TTL },
   );
 
@@ -202,12 +203,7 @@ export async function handleRegisterVerify(request, env) {
     return jsonResponse({ error: 'Invalid JSON' }, 400);
   }
 
-  const { registration, challenge_id, client_id, redirect_uri, state, csrf_token } = body;
-  if (!csrf_token) return jsonResponse({ error: 'Missing CSRF token' }, 400);
-
-  const csrfValid = await env.PCP.get(`csrf:${csrf_token}`);
-  if (csrfValid === null) return jsonResponse({ error: 'Invalid CSRF token' }, 400);
-  await env.PCP.delete(`csrf:${csrf_token}`);
+  const { registration, challenge_id } = body;
 
   const challengeRaw = await env.PCP.get(`webauthn:challenge:${challenge_id}`);
   if (!challengeRaw) return jsonResponse({ error: 'Challenge expired' }, 400);
@@ -249,35 +245,29 @@ export async function handleRegisterVerify(request, env) {
   );
 
   // Standalone registration (no OAuth redirect)
-  if (!challengeData.redirect_uri) {
-    return jsonResponse({ ok: true, credential_id: registrationInfo.credential.id });
-  }
+  const authSession = challengeData.auth_session_id
+    ? await getAuthSession(env, challengeData.auth_session_id)
+    : null;
 
-  // Re-validate redirect_uri against registered client
-  if (challengeData.client_id) {
-    try {
-      const clientRaw = await env.PCP.get(`oauth:client:${challengeData.client_id}`);
-      if (clientRaw) {
-        const client = JSON.parse(clientRaw);
-        if (!client.redirect_uris.includes(challengeData.redirect_uri)) {
-          return jsonResponse({ error: 'Invalid redirect_uri' }, 400);
-        }
-      }
-    } catch { /* client lookup failed — reject */
-      return jsonResponse({ error: 'Invalid client' }, 400);
-    }
+  if (!authSession || !authSession.redirect_uri) {
+    return jsonResponse({ ok: true, credential_id: registrationInfo.credential.id });
   }
 
   const code = randomHex(32);
   await env.PCP.put(
     `oauth:code:${code}`,
-    JSON.stringify({ client_id: challengeData.client_id, redirect_uri: challengeData.redirect_uri, created_at: Date.now() }),
+    JSON.stringify({
+      client_id: authSession.client_id,
+      redirect_uri: authSession.redirect_uri,
+      created_at: Date.now(),
+    }),
     { expirationTtl: 600 },
   );
 
-  const location = new URL(challengeData.redirect_uri);
+  const location = new URL(authSession.redirect_uri);
   location.searchParams.set('code', code);
-  if (challengeData.state) location.searchParams.set('state', challengeData.state);
+  if (authSession.state) location.searchParams.set('state', authSession.state);
+  await env.PCP.delete(`auth:session:${challengeData.auth_session_id}`);
 
   return jsonResponse({ redirect: location.toString() });
 }
@@ -290,7 +280,7 @@ export async function handleAuthVerify(request, env) {
     return jsonResponse({ error: 'Invalid JSON' }, 400);
   }
 
-  const { authentication, challenge_id, client_id, redirect_uri, state } = body;
+  const { authentication, challenge_id } = body;
 
   const challengeRaw = await env.PCP.get(`webauthn:challenge:${challenge_id}`);
   if (!challengeRaw) return jsonResponse({ error: 'Challenge expired' }, 400);
@@ -334,31 +324,24 @@ export async function handleAuthVerify(request, env) {
     JSON.stringify({ ...credentialData, counter: authInfo.counter }),
   );
 
-  // Re-validate redirect_uri against registered client
-  if (challengeData.client_id && challengeData.redirect_uri) {
-    try {
-      const clientRaw = await env.PCP.get(`oauth:client:${challengeData.client_id}`);
-      if (clientRaw) {
-        const client = JSON.parse(clientRaw);
-        if (!client.redirect_uris.includes(challengeData.redirect_uri)) {
-          return jsonResponse({ error: 'Invalid redirect_uri' }, 400);
-        }
-      }
-    } catch {
-      return jsonResponse({ error: 'Invalid client' }, 400);
-    }
-  }
+  const authSession = await getAuthSession(env, challengeData.auth_session_id);
+  if (!authSession) return jsonResponse({ error: 'Invalid auth session' }, 400);
 
   const code = randomHex(32);
   await env.PCP.put(
     `oauth:code:${code}`,
-    JSON.stringify({ client_id: challengeData.client_id, redirect_uri: challengeData.redirect_uri, created_at: Date.now() }),
+    JSON.stringify({
+      client_id: authSession.client_id,
+      redirect_uri: authSession.redirect_uri,
+      created_at: Date.now(),
+    }),
     { expirationTtl: 600 },
   );
 
-  const location = new URL(challengeData.redirect_uri);
+  const location = new URL(authSession.redirect_uri);
   location.searchParams.set('code', code);
-  if (challengeData.state) location.searchParams.set('state', challengeData.state);
+  if (authSession.state) location.searchParams.set('state', authSession.state);
+  await env.PCP.delete(`auth:session:${challengeData.auth_session_id}`);
 
   return jsonResponse({ redirect: location.toString() });
 }
@@ -371,13 +354,16 @@ export async function handleAuthBegin(request, env) {
     return jsonResponse({ error: 'Invalid JSON' }, 400);
   }
 
-  const { client_id, redirect_uri, state } = body;
+  const { auth_session_id } = body;
+  const authSession = await getAuthSession(env, auth_session_id);
+  if (!authSession) return jsonResponse({ error: 'Invalid auth session' }, 400);
+
   const challenge = server.randomChallenge();
   const challengeId = randomHex(16);
 
   await env.PCP.put(
     `webauthn:challenge:${challengeId}`,
-    JSON.stringify({ challenge, type: 'authenticate', client_id, redirect_uri, state }),
+    JSON.stringify({ challenge, type: 'authenticate', auth_session_id }),
     { expirationTtl: CHALLENGE_TTL },
   );
 
@@ -398,38 +384,27 @@ export async function handleSkip(request, env) {
     return jsonResponse({ error: 'Invalid JSON' }, 400);
   }
 
-  const { client_id, redirect_uri, state, csrf_token } = body;
-  if (!csrf_token) return jsonResponse({ error: 'Missing CSRF token' }, 400);
-
-  const csrfValid = await env.PCP.get(`csrf:${csrf_token}`);
-  if (csrfValid === null) return jsonResponse({ error: 'Invalid CSRF token' }, 400);
-  await env.PCP.delete(`csrf:${csrf_token}`);
-
-  // Re-validate redirect_uri against registered client
-  if (client_id && redirect_uri) {
-    try {
-      const clientRaw = await env.PCP.get(`oauth:client:${client_id}`);
-      if (clientRaw) {
-        const client = JSON.parse(clientRaw);
-        if (!client.redirect_uris.includes(redirect_uri)) {
-          return jsonResponse({ error: 'Invalid redirect_uri' }, 400);
-        }
-      }
-    } catch {
-      return jsonResponse({ error: 'Invalid client' }, 400);
-    }
+  const { auth_session_id, csrf_token } = body;
+  const authSession = await getAuthSession(env, auth_session_id);
+  if (!authSession || authSession.csrf_token !== csrf_token) {
+    return jsonResponse({ error: 'Invalid auth session' }, 400);
   }
 
   const code = randomHex(32);
   await env.PCP.put(
     `oauth:code:${code}`,
-    JSON.stringify({ client_id, redirect_uri, created_at: Date.now() }),
+    JSON.stringify({
+      client_id: authSession.client_id,
+      redirect_uri: authSession.redirect_uri,
+      created_at: Date.now(),
+    }),
     { expirationTtl: 600 },
   );
 
-  const location = new URL(redirect_uri);
+  const location = new URL(authSession.redirect_uri);
   location.searchParams.set('code', code);
-  if (state) location.searchParams.set('state', state);
+  if (authSession.state) location.searchParams.set('state', authSession.state);
+  await env.PCP.delete(`auth:session:${auth_session_id}`);
 
   return jsonResponse({ redirect: location.toString() });
 }
@@ -496,7 +471,7 @@ document.getElementById('registerBtn').addEventListener('click', async () => {
     const beginRes = await fetch('/oauth/authorize/webauthn/register/begin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_id: '', redirect_uri: '', state: '', csrf_token: window._passkeySession })
+      body: JSON.stringify({ csrf_token: window._passkeySession })
     });
     const beginData = await beginRes.json();
     if (!beginRes.ok) { alert(beginData.error || 'Error'); return; }
@@ -549,7 +524,7 @@ document.getElementById('registerBtn').addEventListener('click', async () => {
     const verifyRes = await fetch('/oauth/authorize/webauthn/register/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ registration, challenge_id: beginData.challenge_id, client_id: '', redirect_uri: '', state: '', csrf_token: window._passkeySession })
+      body: JSON.stringify({ registration, challenge_id: beginData.challenge_id })
     });
     const verifyData = await verifyRes.json();
     const el = document.getElementById('regMsg');

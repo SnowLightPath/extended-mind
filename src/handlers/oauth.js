@@ -1,3 +1,5 @@
+import { getAuthSession } from '../utils/auth.js';
+
 const CODE_TTL = 600;
 const CSRF_TTL = 600;
 const TOKEN_TTL = 7776000; // 90 days
@@ -46,7 +48,18 @@ function constantTimeEqual(a, b) {
   return mismatch === 0;
 }
 
-function authorizePage(clientName, clientId, redirectUri, state, csrfToken, errorMsg) {
+async function createAuthSession(env, { client_id, redirect_uri, state }) {
+  const authSessionId = randomHex(16);
+  const csrfToken = randomHex(16);
+  await env.PCP.put(
+    `auth:session:${authSessionId}`,
+    JSON.stringify({ client_id, redirect_uri, state, csrf_token: csrfToken }),
+    { expirationTtl: CSRF_TTL },
+  );
+  return { authSessionId, csrfToken };
+}
+
+function authorizePage(clientName, authSessionId, csrfToken, errorMsg) {
   return html(`<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -71,9 +84,7 @@ function authorizePage(clientName, clientId, redirectUri, state, csrfToken, erro
 ${errorMsg ? `<div class="error">${escapeHtml(errorMsg)}</div>` : ''}
 <form method="POST" action="/oauth/authorize">
 <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
-<input type="hidden" name="client_id" value="${escapeHtml(clientId)}">
-<input type="hidden" name="redirect_uri" value="${escapeHtml(redirectUri)}">
-<input type="hidden" name="state" value="${escapeHtml(state || '')}">
+<input type="hidden" name="auth_session_id" value="${escapeHtml(authSessionId)}">
 <label for="token">PCP Token</label>
 <input type="password" id="token" name="token" required placeholder="Enter your PCP token" autocomplete="username webauthn">
 <button type="submit">Authorize</button>
@@ -84,14 +95,12 @@ ${errorMsg ? `<div class="error">${escapeHtml(errorMsg)}</div>` : ''}
   const conditional = window.PublicKeyCredential.isConditionalMediationAvailable;
   if (!conditional || !(await conditional())) return;
 
-  const clientId = document.querySelector('input[name="client_id"]').value;
-  const redirectUri = document.querySelector('input[name="redirect_uri"]').value;
-  const state = document.querySelector('input[name="state"]').value;
+  const authSessionId = document.querySelector('input[name="auth_session_id"]').value;
 
   const beginRes = await fetch('/oauth/authorize/webauthn/auth/begin', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ client_id: clientId, redirect_uri: redirectUri, state })
+    body: JSON.stringify({ auth_session_id: authSessionId })
   });
   if (!beginRes.ok) return;
   const beginData = await beginRes.json();
@@ -135,7 +144,7 @@ ${errorMsg ? `<div class="error">${escapeHtml(errorMsg)}</div>` : ''}
     const verifyRes = await fetch('/oauth/authorize/webauthn/auth/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ authentication, challenge_id: beginData.challenge_id, client_id: clientId, redirect_uri: redirectUri, state })
+      body: JSON.stringify({ authentication, challenge_id: beginData.challenge_id })
     });
     const verifyData = await verifyRes.json();
     if (verifyRes.ok && verifyData.redirect) {
@@ -175,10 +184,13 @@ export async function handleAuthorizeGet(url, env) {
     return html('<p>Error: Invalid request</p>', 400);
   }
 
-  const csrfToken = randomHex(16);
-  await env.PCP.put(`csrf:${csrfToken}`, '{}', { expirationTtl: CSRF_TTL });
+  const { authSessionId, csrfToken } = await createAuthSession(env, {
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    state,
+  });
 
-  return authorizePage(client.name, clientId, redirectUri, state, csrfToken);
+  return authorizePage(client.name, authSessionId, csrfToken);
 }
 
 export async function handleAuthorizePost(request, env) {
@@ -190,22 +202,20 @@ export async function handleAuthorizePost(request, env) {
   }
   const csrfToken = form.get('csrf_token');
   const token = form.get('token');
-  const clientId = form.get('client_id');
-  const redirectUri = form.get('redirect_uri');
-  const state = form.get('state');
+  const authSessionId = form.get('auth_session_id');
 
-  if (!csrfToken) {
+  if (!csrfToken || !authSessionId) {
     return html('<p>Error: Invalid request — please try again from the authorization link</p>', 400);
   }
-  const csrfValid = await env.PCP.get(`csrf:${csrfToken}`);
-  if (csrfValid === null) {
+
+  const authSession = await getAuthSession(env, authSessionId);
+  if (!authSession || authSession.csrf_token !== csrfToken) {
     return html('<p>Error: Invalid request — please try again from the authorization link</p>', 400);
   }
-  await env.PCP.delete(`csrf:${csrfToken}`);
 
   let client;
   try {
-    const clientRaw = await env.PCP.get(`oauth:client:${clientId}`);
+    const clientRaw = await env.PCP.get(`oauth:client:${authSession.client_id}`);
     if (!clientRaw) {
       return html('<p>Error: Invalid request</p>', 400);
     }
@@ -214,26 +224,36 @@ export async function handleAuthorizePost(request, env) {
     return html('<p>Error: Invalid request</p>', 400);
   }
 
-  if (!client.redirect_uris.includes(redirectUri)) {
+  if (!client.redirect_uris.includes(authSession.redirect_uri)) {
     return html('<p>Error: Invalid request</p>', 400);
   }
 
   if (token !== env.PCP_TOKEN) {
-    const newCsrf = randomHex(16);
-    await env.PCP.put(`csrf:${newCsrf}`, '{}', { expirationTtl: CSRF_TTL });
-    return authorizePage(client.name, clientId, redirectUri, state, newCsrf, 'Invalid token — please try again');
+    const { authSessionId: newAuthSessionId, csrfToken: newCsrf } = await createAuthSession(env, {
+      client_id: authSession.client_id,
+      redirect_uri: authSession.redirect_uri,
+      state: authSession.state,
+    });
+    await env.PCP.delete(`auth:session:${authSessionId}`);
+    return authorizePage(client.name, newAuthSessionId, newCsrf, 'Invalid token — please try again');
   }
+
+  await env.PCP.delete(`auth:session:${authSessionId}`);
 
   const code = randomHex(32);
   await env.PCP.put(
     `oauth:code:${code}`,
-    JSON.stringify({ client_id: clientId, redirect_uri: redirectUri, created_at: Date.now() }),
+    JSON.stringify({
+      client_id: authSession.client_id,
+      redirect_uri: authSession.redirect_uri,
+      created_at: Date.now(),
+    }),
     { expirationTtl: CODE_TTL },
   );
 
-  const location = new URL(redirectUri);
+  const location = new URL(authSession.redirect_uri);
   location.searchParams.set('code', code);
-  if (state) location.searchParams.set('state', state);
+  if (authSession.state) location.searchParams.set('state', authSession.state);
 
   return Response.redirect(location.toString(), 302);
 }
