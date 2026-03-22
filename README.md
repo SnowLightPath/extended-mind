@@ -56,6 +56,8 @@ You switch between Claude Chat, Claude Code, ChatGPT, Codex. Each session starts
 - **⚡ KV** — hot storage for all reads/writes
 - **📦 GitHub** — async version history backup (your private data repo)
 - **🔍 Claude API** — classifies logged messages, extracts priorities, detects contradictions
+- **🔑 WebAuthn** — passkey authentication (Touch ID / Face ID) on OAuth authorize
+- **🔗 OAuth 2.0** — authorization code flow for ChatGPT / Claude Chat, with `/oauth/revoke` (RFC 7009)
 
 ## 🚀 Quick Start
 
@@ -93,19 +95,20 @@ Add a webhook in the data repo (Settings → Webhooks):
 |-------|-------|
 | Payload URL | `https://your-worker.workers.dev/webhook` |
 | Content type | `application/json` |
+| Secret | Same value as `WEBHOOK_SECRET` (required — webhook is rejected without it) |
 | Events | Just the push event |
 
 This enables automatic core sync: when you push changes to `seed/core.yaml`, the webhook notifies the Worker, which updates KV. A cron trigger also runs as a fallback every 5 minutes.
 
 ### 3. Seed your context
 
-Edit `seed/core.yaml` with your identity. Copy `seed/active.example.json` to `seed/active.json` and edit with your work context, then:
+Edit `seed/core.yaml` with your identity. Copy `seed/active.example.json` to `seed/active.json` and edit with your work context. Place these in your private data repo (not this repo), then:
 
 ```bash
 node seed/seed-kv.js
 ```
 
-This writes 4 KV keys (`core`, `active`, `changelog`, `review_queue`). **Initial setup only** — re-running resets everything and wipes the active context that AI clients have built up.
+This writes 4 initial KV keys (`core`, `active`, `changelog`, `review_queue`). Additional keys (OAuth tokens, CSRF tokens, WebAuthn credentials) are created at runtime. **Initial setup only** — re-running resets everything and wipes the active context that AI clients have built up.
 
 ### 4. Update core
 
@@ -205,8 +208,18 @@ When an AI calls `context_log`:
 3. GitHub gets an async backup commit
 
 When an AI calls `context_get`:
-- Returns everything as a single YAML document (~2500 tokens)
+- Returns everything as a single YAML document (~2500-3000 tokens)
 - The AI now knows who you are, what you're working on, and what happened across all platforms
+
+## 🔐 Security
+
+- **WebAuthn Passkeys** — Touch ID / Face ID / security key authentication on the OAuth authorize page. Register at `/passkey`, then use Conditional UI (browser auto-suggests passkey on the token input field)
+- **XSS Protection** — all dynamic values in OAuth HTML are entity-encoded
+- **CSRF Protection** — one-time tokens on the authorize form
+- **Token TTL** — OAuth tokens expire after 90 days (re-auth required)
+- **Token Revocation** — `POST /oauth/revoke` (RFC 7009) to invalidate compromised tokens
+- **Webhook Signature** — HMAC-SHA256 verification required (`WEBHOOK_SECRET`)
+- **Constant-time Comparison** — client secret verification resistant to timing attacks
 
 ## 🔀 Data Separation
 

@@ -2,7 +2,7 @@ import { authenticateWithOAuth } from './utils/auth.js';
 import { tools } from './tools.js';
 import { handleGet } from './handlers/get.js';
 import { handlePut } from './handlers/put.js';
-import { handleAuthorizeGet, handleAuthorizePost, handleToken } from './handlers/oauth.js';
+import { handleAuthorizeGet, handleAuthorizePost, handleToken, handleRevoke } from './handlers/oauth.js';
 const SERVER_INFO = { name: 'extended-mind', version: '1.0.0' };
 
 function json(body, status = 200, extraHeaders = {}) {
@@ -49,7 +49,7 @@ export default {
       });
     }
 
-    // Webhook (signature-verified when WEBHOOK_SECRET is set)
+    // Webhook (WEBHOOK_SECRET required, signature-verified)
     if (url.pathname === '/webhook' && request.method === 'POST') {
       const { handleWebhook } = await import('./handlers/webhook.js');
       return handleWebhook(request, env, ctx);
@@ -63,10 +63,10 @@ export default {
         issuer,
         authorization_endpoint: `${issuer}/oauth/authorize`,
         token_endpoint: `${issuer}/oauth/token`,
+        revocation_endpoint: `${issuer}/oauth/revoke`,
         response_types_supported: ['code'],
         grant_types_supported: ['authorization_code'],
         token_endpoint_auth_methods_supported: ['client_secret_post'],
-        code_challenge_methods_supported: ['S256'],
         logo_uri: `${issuer}/icon.svg`,
       });
     }
@@ -79,6 +79,40 @@ export default {
     }
     if (url.pathname === '/oauth/token' && request.method === 'POST') {
       return handleToken(request, env);
+    }
+    if (url.pathname === '/oauth/revoke' && request.method === 'POST') {
+      return handleRevoke(request, env);
+    }
+    // Passkey enrollment page (GET: public form, POST: PCP_TOKEN verified in handler)
+    if (url.pathname === '/passkey') {
+      if (request.method === 'GET') {
+        const { passkeyManagePage } = await import('./handlers/webauthn.js');
+        return passkeyManagePage();
+      }
+      if (request.method === 'POST') {
+        const { handlePasskeyEnroll } = await import('./handlers/webauthn.js');
+        return handlePasskeyEnroll(request, env);
+      }
+      return json({ error: 'Method not allowed' }, 405);
+    }
+
+    if (url.pathname.startsWith('/oauth/authorize/webauthn/') && request.method === 'POST') {
+      const { handleRegisterBegin, handleRegisterVerify, handleAuthBegin, handleAuthVerify, handleSkip } = await import('./handlers/webauthn.js');
+      const sub = url.pathname.replace('/oauth/authorize/webauthn/', '');
+      switch (sub) {
+        case 'register/begin':
+          return handleRegisterBegin(request, env);
+        case 'register/verify':
+          return handleRegisterVerify(request, env);
+        case 'auth/begin':
+          return handleAuthBegin(request, env);
+        case 'auth/verify':
+          return handleAuthVerify(request, env);
+        case 'skip':
+          return handleSkip(request, env);
+        default:
+          return json({ error: 'Not found' }, 404);
+      }
     }
 
     // MCP route

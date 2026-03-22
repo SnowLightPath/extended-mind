@@ -55,17 +55,20 @@ async function processWebhook(payload, env) {
 export async function handleWebhook(request, env, ctx) {
   const body = await request.text();
 
-  if (env.WEBHOOK_SECRET) {
-    const signature = request.headers.get('x-hub-signature-256');
-    const valid = await verifySignature(env.WEBHOOK_SECRET, body, signature);
-    if (!valid) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-  } else {
-    console.warn('WEBHOOK_SECRET not configured — accepting unverified webhook');
+  if (!env.WEBHOOK_SECRET) {
+    return new Response(JSON.stringify({ error: 'Webhook not configured' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  const signature = request.headers.get('x-hub-signature-256');
+  const valid = await verifySignature(env.WEBHOOK_SECRET, body, signature);
+  if (!valid) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 
   let payload;

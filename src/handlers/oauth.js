@@ -1,5 +1,6 @@
 const CODE_TTL = 600;
-const TOKEN_TTL = 31536000; // 1 year
+const CSRF_TTL = 600;
+const TOKEN_TTL = 7776000; // 90 days
 
 const PLATFORM_MAP = {
   'chatgpt-extended-mind': 'chatgpt',
@@ -26,7 +27,26 @@ function randomHex(bytes) {
   return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-function authorizePage(clientName, clientId, redirectUri, state, errorMsg) {
+function escapeHtml(str) {
+  if (!str) return '';
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;');
+}
+
+function constantTimeEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i++) {
+    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return mismatch === 0;
+}
+
+function authorizePage(clientName, clientId, redirectUri, state, csrfToken, errorMsg) {
   return html(`<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -46,17 +66,86 @@ function authorizePage(clientName, clientId, redirectUri, state, errorMsg) {
 </head>
 <body>
 <h1>Extended Mind</h1>
-<p><strong>${clientName}</strong> があなたのコンテキストへのアクセスを要求しています。</p>
+<p><strong>${escapeHtml(clientName)}</strong> があなたのコンテキストへのアクセスを要求しています。</p>
 <p>アクセス権限: コンテキストの読み取り・書き込み</p>
-${errorMsg ? `<div class="error">${errorMsg}</div>` : ''}
+${errorMsg ? `<div class="error">${escapeHtml(errorMsg)}</div>` : ''}
 <form method="POST" action="/oauth/authorize">
-<input type="hidden" name="client_id" value="${clientId}">
-<input type="hidden" name="redirect_uri" value="${redirectUri}">
-<input type="hidden" name="state" value="${state || ''}">
+<input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
+<input type="hidden" name="client_id" value="${escapeHtml(clientId)}">
+<input type="hidden" name="redirect_uri" value="${escapeHtml(redirectUri)}">
+<input type="hidden" name="state" value="${escapeHtml(state || '')}">
 <label for="token">PCP Token</label>
-<input type="password" id="token" name="token" required placeholder="Enter your PCP token">
+<input type="password" id="token" name="token" required placeholder="Enter your PCP token" autocomplete="username webauthn">
 <button type="submit">Authorize</button>
 </form>
+<script>
+(async () => {
+  if (!window.PublicKeyCredential) return;
+  const conditional = window.PublicKeyCredential.isConditionalMediationAvailable;
+  if (!conditional || !(await conditional())) return;
+
+  const clientId = document.querySelector('input[name="client_id"]').value;
+  const redirectUri = document.querySelector('input[name="redirect_uri"]').value;
+  const state = document.querySelector('input[name="state"]').value;
+
+  const beginRes = await fetch('/oauth/authorize/webauthn/auth/begin', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ client_id: clientId, redirect_uri: redirectUri, state })
+  });
+  if (!beginRes.ok) return;
+  const beginData = await beginRes.json();
+
+  function b64urlToBytes(b64) {
+    const str = atob(b64.replace(/-/g,'+').replace(/_/g,'/'));
+    return Uint8Array.from(str, c => c.charCodeAt(0));
+  }
+  function bytesToB64url(buf) {
+    const bytes = new Uint8Array(buf);
+    let str = '';
+    for (const b of bytes) str += String.fromCharCode(b);
+    return btoa(str).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=/g,'');
+  }
+
+  try {
+    const credential = await navigator.credentials.get({
+      publicKey: {
+        challenge: b64urlToBytes(beginData.challenge),
+        rpId: beginData.rpId,
+        timeout: beginData.timeout,
+        userVerification: beginData.userVerification
+      },
+      mediation: 'conditional'
+    });
+
+    const authentication = {
+      id: credential.id,
+      rawId: bytesToB64url(credential.rawId),
+      type: credential.type,
+      authenticatorAttachment: credential.authenticatorAttachment,
+      clientExtensionResults: credential.getClientExtensionResults(),
+      response: {
+        clientDataJSON: bytesToB64url(credential.response.clientDataJSON),
+        authenticatorData: bytesToB64url(credential.response.authenticatorData),
+        signature: bytesToB64url(credential.response.signature),
+        userHandle: credential.response.userHandle ? bytesToB64url(credential.response.userHandle) : undefined
+      }
+    };
+
+    const verifyRes = await fetch('/oauth/authorize/webauthn/auth/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ authentication, challenge_id: beginData.challenge_id, client_id: clientId, redirect_uri: redirectUri, state })
+    });
+    const verifyData = await verifyRes.json();
+    if (verifyRes.ok && verifyData.redirect) {
+      window.location.href = verifyData.redirect;
+    }
+  } catch (e) {
+    // User cancelled or no credential — fall through to password form
+  }
+})();
+</script>
 </body>
 </html>`);
 }
@@ -86,7 +175,10 @@ export async function handleAuthorizeGet(url, env) {
     return html('<p>Error: Invalid request</p>', 400);
   }
 
-  return authorizePage(client.name, clientId, redirectUri, state);
+  const csrfToken = randomHex(16);
+  await env.PCP.put(`csrf:${csrfToken}`, '{}', { expirationTtl: CSRF_TTL });
+
+  return authorizePage(client.name, clientId, redirectUri, state, csrfToken);
 }
 
 export async function handleAuthorizePost(request, env) {
@@ -96,10 +188,20 @@ export async function handleAuthorizePost(request, env) {
   } catch {
     return html('<p>Error: Invalid request</p>', 400);
   }
+  const csrfToken = form.get('csrf_token');
   const token = form.get('token');
   const clientId = form.get('client_id');
   const redirectUri = form.get('redirect_uri');
   const state = form.get('state');
+
+  if (!csrfToken) {
+    return html('<p>Error: Invalid request — please try again from the authorization link</p>', 400);
+  }
+  const csrfValid = await env.PCP.get(`csrf:${csrfToken}`);
+  if (csrfValid === null) {
+    return html('<p>Error: Invalid request — please try again from the authorization link</p>', 400);
+  }
+  await env.PCP.delete(`csrf:${csrfToken}`);
 
   let client;
   try {
@@ -113,7 +215,9 @@ export async function handleAuthorizePost(request, env) {
   }
 
   if (token !== env.PCP_TOKEN) {
-    return authorizePage(client.name, clientId, redirectUri, state, 'Invalid token — please try again');
+    const newCsrf = randomHex(16);
+    await env.PCP.put(`csrf:${newCsrf}`, '{}', { expirationTtl: CSRF_TTL });
+    return authorizePage(client.name, clientId, redirectUri, state, newCsrf, 'Invalid token — please try again');
   }
 
   const code = randomHex(32);
@@ -164,7 +268,7 @@ export async function handleToken(request, env) {
     return oauthError('invalid_client', 'Authentication failed', 401);
   }
 
-  if (client.client_secret !== client_secret) {
+  if (!constantTimeEqual(client.client_secret || '', client_secret || '')) {
     return oauthError('invalid_client', 'Authentication failed', 401);
   }
 
@@ -204,4 +308,64 @@ export async function handleToken(request, env) {
       headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
     },
   );
+}
+
+export async function handleRevoke(request, env) {
+  const contentType = request.headers.get('content-type') || '';
+  let params;
+
+  try {
+    if (contentType.includes('application/x-www-form-urlencoded')) {
+      const form = await request.formData();
+      params = Object.fromEntries(form.entries());
+    } else if (contentType.includes('application/json')) {
+      params = await request.json();
+    } else {
+      params = {};
+    }
+  } catch {
+    return oauthError('invalid_request', 'Malformed request body');
+  }
+
+  const tokenToRevoke = params.token;
+  if (!tokenToRevoke) {
+    return oauthError('invalid_request', 'Missing token parameter');
+  }
+
+  // Authenticate: PCP_TOKEN or client_id + client_secret
+  const authHeader = request.headers.get('Authorization');
+  let authenticated = false;
+
+  if (authHeader) {
+    const parts = authHeader.split(' ');
+    if (parts.length === 2 && parts[0] === 'Bearer' && parts[1] === env.PCP_TOKEN) {
+      authenticated = true;
+    }
+  }
+
+  if (!authenticated && params.client_id && params.client_secret) {
+    try {
+      const clientRaw = await env.PCP.get(`oauth:client:${params.client_id}`);
+      if (clientRaw) {
+        const client = JSON.parse(clientRaw);
+        if (constantTimeEqual(client.client_secret || '', params.client_secret || '')) {
+          authenticated = true;
+        }
+      }
+    } catch (err) {
+      console.error('Revoke client lookup failed:', err.message || err);
+    }
+  }
+
+  if (!authenticated) {
+    return oauthError('invalid_client', 'Authentication failed', 401);
+  }
+
+  // RFC 7009: always return 200, even if token doesn't exist
+  await env.PCP.delete(`oauth:token:${tokenToRevoke}`);
+
+  return new Response(JSON.stringify({}), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+  });
 }

@@ -1,5 +1,5 @@
 const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages';
-const MODEL = 'claude-sonnet-4-20250514';
+const MODEL = 'claude-sonnet-4-6';
 
 export async function classifyMessage(env, message, currentActive) {
   const response = await fetch(ANTHROPIC_API, {

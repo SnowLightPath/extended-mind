@@ -10,5 +10,8 @@
   },
   "devDependencies": {
     "wrangler": "^4"
+  },
+  "dependencies": {
+    "@passwordless-id/webauthn": "^2.3.5"
   }
 }
