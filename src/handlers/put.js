@@ -15,13 +15,8 @@ export async function handlePut(args, env, platform, ctx) {
 
   const timestamp = new Date().toISOString();
 
-  const [activeRaw, changelogRaw] = await Promise.all([
-    env.PCP.get('active'),
-    env.PCP.get('changelog'),
-  ]);
-
+  const activeRaw = await env.PCP.get('active');
   const active = activeRaw ? JSON.parse(activeRaw) : { sessions: [] };
-  const changelog = changelogRaw ? JSON.parse(changelogRaw) : [];
 
   if (!active.sessions) active.sessions = [];
   active.sessions.push({ timestamp, platform, message });
@@ -29,30 +24,32 @@ export async function handlePut(args, env, platform, ctx) {
     active.sessions = active.sessions.slice(-MAX_SESSIONS);
   }
 
+  await env.PCP.put('active', JSON.stringify(active));
+
   const preview = message.length > 80 ? message.slice(0, 80) + '...' : message;
-  changelog.unshift({ timestamp, preview });
-  if (changelog.length > MAX_CHANGELOG) {
-    changelog.length = MAX_CHANGELOG;
-  }
-
-  await Promise.all([
-    env.PCP.put('active', JSON.stringify(active)),
-    env.PCP.put('changelog', JSON.stringify(changelog)),
-  ]);
-
-  ctx.waitUntil(asyncPostProcess(env, message, timestamp, platform));
+  ctx.waitUntil(asyncPostProcess(env, message, timestamp, platform, preview));
 
   return {
     content: [{ type: 'text', text: `Stored. (${timestamp})` }],
   };
 }
 
-async function asyncPostProcess(env, message, timestamp, platform) {
-  const shouldClassify = message.length >= 50;
+async function asyncPostProcess(env, message, timestamp, platform, preview) {
   await Promise.allSettled([
+    updateChangelog(env, timestamp, preview),
     commitToGitHub(env, message, timestamp, platform),
-    shouldClassify ? classifyAndUpdate(env, message, timestamp, platform) : Promise.resolve(),
+    message.length >= 50 ? classifyAndUpdate(env, message, timestamp, platform) : Promise.resolve(),
   ]);
+}
+
+async function updateChangelog(env, timestamp, preview) {
+  const changelogRaw = await env.PCP.get('changelog');
+  const changelog = changelogRaw ? JSON.parse(changelogRaw) : [];
+  changelog.unshift({ timestamp, preview });
+  if (changelog.length > MAX_CHANGELOG) {
+    changelog.length = MAX_CHANGELOG;
+  }
+  await env.PCP.put('changelog', JSON.stringify(changelog));
 }
 
 async function commitToGitHub(env, message, timestamp, platform) {

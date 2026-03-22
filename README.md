@@ -4,6 +4,14 @@
   <img src="assets/banner.webp" alt="Extended Mind" width="600">
 </p>
 
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/SnowLightPath/extended-mind" alt="License"></a>
+  <a href="https://github.com/SnowLightPath/extended-mind"><img src="https://img.shields.io/github/stars/SnowLightPath/extended-mind" alt="GitHub Stars"></a>
+  <a href="https://github.com/SnowLightPath/extended-mind/releases"><img src="https://img.shields.io/github/v/release/SnowLightPath/extended-mind" alt="Release"></a>
+  <a href="https://github.com/SnowLightPath/extended-mind"><img src="https://img.shields.io/badge/platform-Cloudflare%20Workers-F38020?logo=cloudflare&logoColor=white" alt="Cloudflare Workers"></a>
+  <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/protocol-MCP-5A67D8" alt="MCP"></a>
+</p>
+
 **Your context, shared across every AI platform.**
 
 Extended Mind is a Personal Context Protocol — a single MCP server that gives Claude, ChatGPT, Codex, and any MCP-compatible AI access to the same personal context.
