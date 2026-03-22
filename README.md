@@ -52,8 +52,8 @@ You switch between Claude Chat, Claude Code, ChatGPT, Codex. Each session starts
                   |    Cloudflare     |
                   |      Worker       |
                   |                   |
-                  |  context_get ---->| cached response (~3ms)
-                  |  context_log ---->| async write (~5ms response)
+                  |  context_get ---->| cached response (~30ms)
+                  |  context_log ---->| async write (~30ms response)
                   |                   |   +-> Claude classify (async)
                   |                   |   +-> GitHub backup (async)
                   +-------------------+
@@ -209,7 +209,7 @@ curl -s -X POST https://your-worker.workers.dev/mcp \
 | **📝 Active** | Team, projects, priorities, recent sessions | AI clients | `context_log()` → KV + GitHub + classification |
 
 When an AI calls `context_log`:
-1. Message stored **verbatim** in KV (async via `waitUntil`, ~5ms response)
+1. Message stored **verbatim** in KV (async via `waitUntil`, ~30ms response)
 2. Claude API classifies in the background — updates priorities, flags contradictions
 3. GitHub gets an async backup commit
 
