@@ -1,7 +1,7 @@
 # ✦ Extended Mind
 
 <p align="center">
-  <img src="assets/Extended_Mind.webp" alt="Extended Mind" width="200">
+  <img src="assets/banner.webp" alt="Extended Mind" width="600">
 </p>
 
 **Your context, shared across every AI platform.**
