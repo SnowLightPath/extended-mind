@@ -172,7 +172,7 @@ export default {
         try {
           switch (name) {
             case 'context_get':
-              return rpcOk(body.id, await handleGet(env));
+              return rpcOk(body.id, await handleGet(env, ctx));
             case 'context_log':
               return rpcOk(body.id, await handlePut(args || {}, env, getPlatform(request, auth.platform), ctx));
             default:
@@ -201,6 +201,8 @@ export default {
       if (file.sha !== lastSha) {
         await env.PCP.put('core', file.content);
         await env.PCP.put('_core_sha', file.sha);
+        const { invalidateCache } = await import('./utils/cache.js');
+        await invalidateCache(env);
         console.log('Core synced via cron (SHA changed)');
       }
     } catch (err) {

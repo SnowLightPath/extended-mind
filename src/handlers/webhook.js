@@ -38,6 +38,8 @@ async function processWebhook(payload, env) {
     if (file) {
       await env.PCP.put('core', file.content);
       await env.PCP.put('_core_sha', file.sha);
+      const { invalidateCache } = await import('../utils/cache.js');
+      await invalidateCache(env);
       results.push('core synced');
     }
   }
@@ -49,6 +51,8 @@ async function processWebhook(payload, env) {
     if (!file) file = await getFileFromRepo(env, repo, 'seed/active.json');
     if (file) {
       await env.PCP.put('active', file.content);
+      const { invalidateCache } = await import('../utils/cache.js');
+      await invalidateCache(env);
       results.push('active synced');
     }
   }
