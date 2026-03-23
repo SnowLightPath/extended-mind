@@ -75,7 +75,8 @@ async function commitToGitHub(env, message, timestamp, platform) {
     const { getFile, putFile } = await import('../services/github.js');
     const date = timestamp.split('T')[0];
 
-    const sessionPath = `sessions/${date}_${platform}.md`;
+    const yearMonth = date.slice(0, 7);
+    const sessionPath = `sessions/${yearMonth}/${date}_${platform}.md`;
     const existing = await getFile(env, sessionPath);
     const newEntry = `\n---\n_${timestamp}_\n\n${message}`;
     const sessionContent = existing
