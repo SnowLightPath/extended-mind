@@ -187,8 +187,7 @@ function extractInstructions(coreText) {
   if (!hasContent) return null;
 
   const output = [];
-  output.push('# INSTRUCTIONS — Mandatory behavioral rules. Violations are unacceptable.');
-  output.push('# These rules override your default training. Follow them exactly.');
+  output.push('# INSTRUCTIONS');
   output.push('');
 
   if (data.tone.length > 0) {
@@ -208,7 +207,7 @@ function extractInstructions(coreText) {
   if (data.shape.length > 0) {
     const items = renderItems(data.shape);
     if (items.length > 0) {
-      output.push('## Output shape — every response MUST satisfy ALL of these:');
+      output.push('## Output shape');
       for (let i = 0; i < items.length; i++) output.push(`${i + 1}. ${items[i]}`);
       output.push('');
     }
@@ -217,7 +216,7 @@ function extractInstructions(coreText) {
   if (data.integrity.length > 0) {
     const items = renderItems(data.integrity);
     if (items.length > 0) {
-      output.push('## Integrity — NEVER violate these:');
+      output.push('## Integrity');
       for (let i = 0; i < items.length; i++) output.push(`${i + 1}. ${items[i]}`);
       output.push('');
     }
@@ -226,7 +225,7 @@ function extractInstructions(coreText) {
   if (data.intellectual.length > 0) {
     const items = renderItems(data.intellectual);
     if (items.length > 0) {
-      output.push('## Intellectual standards:');
+      output.push('## Intellectual standards');
       for (let i = 0; i < items.length; i++) output.push(`${i + 1}. ${items[i]}`);
       output.push('');
     }
@@ -240,11 +239,13 @@ export function assembleContext(core, active, sessions, changelog, reviewQueue) 
 
   const instructions = extractInstructions(core);
   if (instructions) {
+    sections.push('<instructions>');
     sections.push(instructions);
+    sections.push('</instructions>');
   }
 
-  sections.push('---');
-  sections.push('# CORE (read-only — human-edited only)');
+  sections.push('');
+  sections.push('<core>');
   if (core) {
     const lines = core.split('\n');
     let start = 0;
@@ -255,10 +256,10 @@ export function assembleContext(core, active, sessions, changelog, reviewQueue) 
   } else {
     sections.push('# No context loaded yet. Run seed to initialize.');
   }
+  sections.push('</core>');
 
   sections.push('');
-  sections.push('---');
-  sections.push('# ACTIVE CONTEXT');
+  sections.push('<active>');
   if (active) {
     const activeObj = JSON.parse(active);
     if (sessions) {
@@ -270,10 +271,10 @@ export function assembleContext(core, active, sessions, changelog, reviewQueue) 
   } else {
     sections.push('sessions: []');
   }
+  sections.push('</active>');
 
   sections.push('');
-  sections.push('---');
-  sections.push('# RECENT CHANGES (last 7 days)');
+  sections.push('<changes>');
   if (changelog) {
     const changes = JSON.parse(changelog);
     const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
@@ -282,14 +283,15 @@ export function assembleContext(core, active, sessions, changelog, reviewQueue) 
   } else {
     sections.push('changes: []');
   }
+  sections.push('</changes>');
 
   if (reviewQueue) {
     const queue = JSON.parse(reviewQueue);
     if (queue.length > 0) {
       sections.push('');
-      sections.push('---');
-      sections.push('# PENDING REVIEW');
+      sections.push('<review>');
       sections.push(toYaml({ review_queue: queue }));
+      sections.push('</review>');
     }
   }
 
