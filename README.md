@@ -1,7 +1,7 @@
 # ✦ Extended Mind
 
 <p align="center">
-  <img src="assets/banner.webp" alt="Extended Mind" width="600">
+  <img src="assets/banner.webp" alt="Extended Mind">
 </p>
 
 <p align="center">
