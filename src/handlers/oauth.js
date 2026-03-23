@@ -1,4 +1,4 @@
-import { getAuthSession } from '../utils/auth.js';
+import { getAuthSession, constantTimeEqual } from '../utils/auth.js';
 
 const CODE_TTL = 600;
 const CSRF_TTL = 600;
@@ -39,14 +39,6 @@ function escapeHtml(str) {
     .replace(/'/g, '&#x27;');
 }
 
-function constantTimeEqual(a, b) {
-  if (a.length !== b.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < a.length; i++) {
-    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return mismatch === 0;
-}
 
 async function createAuthSession(env, { client_id, redirect_uri, state }) {
   const authSessionId = randomHex(16);
@@ -228,7 +220,7 @@ export async function handleAuthorizePost(request, env) {
     return html('<p>Error: Invalid request</p>', 400);
   }
 
-  if (token !== env.PCP_TOKEN) {
+  if (!constantTimeEqual(token, env.PCP_TOKEN)) {
     const { authSessionId: newAuthSessionId, csrfToken: newCsrf } = await createAuthSession(env, {
       client_id: authSession.client_id,
       redirect_uri: authSession.redirect_uri,
@@ -362,7 +354,7 @@ export async function handleRevoke(request, env) {
 
   if (authHeader) {
     const parts = authHeader.split(' ');
-    if (parts.length === 2 && parts[0] === 'Bearer' && parts[1] === env.PCP_TOKEN) {
+    if (parts.length === 2 && parts[0] === 'Bearer' && constantTimeEqual(parts[1], env.PCP_TOKEN)) {
       authenticated = true;
     }
   }

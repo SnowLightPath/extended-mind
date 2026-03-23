@@ -1,5 +1,5 @@
 import { server } from '@passwordless-id/webauthn';
-import { getAuthSession } from '../utils/auth.js';
+import { getAuthSession, constantTimeEqual } from '../utils/auth.js';
 
 const CHALLENGE_TTL = 300;
 
@@ -556,7 +556,7 @@ async function handlePasskeyEnroll(request, env) {
   }
 
   if (body.action === 'auth') {
-    if (body.token !== env.PCP_TOKEN) {
+    if (!constantTimeEqual(body.token, env.PCP_TOKEN)) {
       return jsonResponse({ error: 'Invalid token' }, 401);
     }
     const sessionToken = randomHex(16);

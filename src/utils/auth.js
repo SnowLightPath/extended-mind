@@ -1,3 +1,12 @@
+export function constantTimeEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i++) {
+    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return mismatch === 0;
+}
+
 export async function authenticateWithOAuth(request, env) {
   const header = request.headers.get('Authorization');
   if (!header) return { ok: false };
@@ -6,7 +15,7 @@ export async function authenticateWithOAuth(request, env) {
 
   const token = parts[1];
 
-  if (token === env.PCP_TOKEN) {
+  if (constantTimeEqual(token, env.PCP_TOKEN)) {
     return { ok: true, platform: 'claude-code' };
   }
 
