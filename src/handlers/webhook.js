@@ -44,11 +44,9 @@ async function processWebhook(payload, env) {
     }
   }
 
-  if (changedFiles.includes('seed/active.json') || changedFiles.includes('active.json')) {
-    const repo = sourceRepo || env.GITHUB_REPO;
+  if (changedFiles.includes('active.json')) {
     const { getFileFromRepo } = await import('../services/github.js');
-    let file = await getFileFromRepo(env, repo, 'active.json');
-    if (!file) file = await getFileFromRepo(env, repo, 'seed/active.json');
+    let file = await getFileFromRepo(env, sourceRepo, 'active.json');
     if (file) {
       await env.PCP.put('active', file.content);
       const { invalidateCache } = await import('../utils/cache.js');
