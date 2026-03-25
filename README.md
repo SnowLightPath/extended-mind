@@ -89,6 +89,8 @@ npx wrangler secret put WEBHOOK_SECRET    # GitHub webhook HMAC-SHA256 secret
 # - Set GITHUB_REPO to your private data repo (e.g., "yourname/my-mind")
 # - Set CLASSIFY_PROVIDER to "openai" or "anthropic" (default: openai)
 # - Optionally set CLASSIFY_MODEL to override (openai: gpt-5.4, anthropic: claude-sonnet-4-6)
+# - Optionally set CLASSIFY_REASONING_EFFORT for OpenAI (none/low/medium/high/xhigh, default: medium)
+# - Optionally set CLASSIFY_MAX_TOKENS (default: 16384 openai, 4096 anthropic)
 
 npx wrangler deploy
 ```
@@ -158,7 +160,7 @@ Global setting — all projects get access. Add `"mcp__extended-mind"` to `permi
 | OAuth Client ID | Your registered client ID |
 | OAuth Client Secret | Your registered client secret |
 
-**🔵 ChatGPT** — Settings → Apps → Create app (native MCP, not Custom GPT):
+**⚪ ChatGPT** — Settings → Apps → Create app (native MCP, not Custom GPT):
 
 | Field | Value |
 |-------|-------|
@@ -167,7 +169,7 @@ Global setting — all projects get access. Add `"mcp__extended-mind"` to `permi
 | Auth URL | `https://your-worker.workers.dev/oauth/authorize` |
 | Token URL | `https://your-worker.workers.dev/oauth/token` |
 
-**🔵 Codex** — two steps:
+**⚪ Codex** — two steps:
 
 1. Settings → MCP servers → Connect a custom MCP:
 
