@@ -7,16 +7,20 @@ const PROVIDERS = {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
     }),
-    buildBody: (model, system, message) => ({
+    buildBody: (model, system, message, env) => ({
       model,
-      reasoning: { effort: 'medium' },
+      reasoning: { effort: env.CLASSIFY_REASONING_EFFORT || 'medium' },
       input: [
         { role: 'system', content: system },
         { role: 'user', content: message },
       ],
-      max_output_tokens: 1000,
+      text: { format: { type: 'text' } },
+      max_output_tokens: parseInt(env.CLASSIFY_MAX_TOKENS || '16384'),
     }),
-    parseText: (data) => data.output_text,
+    parseText: (data) => {
+      const msg = data.output.find((o) => o.type === 'message');
+      return msg?.content?.[0]?.text;
+    },
   },
   anthropic: {
     url: 'https://api.anthropic.com/v1/messages',
@@ -27,9 +31,9 @@ const PROVIDERS = {
       'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
     }),
-    buildBody: (model, system, message) => ({
+    buildBody: (model, system, message, env) => ({
       model,
-      max_tokens: 1000,
+      max_tokens: parseInt(env.CLASSIFY_MAX_TOKENS || '4096'),
       system,
       messages: [{ role: 'user', content: message }],
     }),
@@ -50,7 +54,7 @@ export async function classifyMessage(env, message, currentActive) {
   const response = await fetch(provider.url, {
     method: 'POST',
     headers: provider.buildHeaders(apiKey),
-    body: JSON.stringify(provider.buildBody(model, system, message)),
+    body: JSON.stringify(provider.buildBody(model, system, message, env)),
   });
 
   if (!response.ok) {
@@ -60,6 +64,9 @@ export async function classifyMessage(env, message, currentActive) {
 
   const data = await response.json();
   const text = provider.parseText(data);
+  if (!text) {
+    throw new Error(`${providerName}: empty classification response`);
+  }
   const clean = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
   return JSON.parse(clean);
 }
