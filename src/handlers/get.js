@@ -24,7 +24,7 @@ export async function handleGet(env, ctx) {
     env.PCP.get('review_queue'),
   ]);
 
-  const yaml = assembleContext(core, active, sessions, changelog, reviewQueue);
+  const yaml = assembleContext(core, active, sessions, changelog, reviewQueue, env.TIMEZONE);
   setMemCache(yaml);
 
   // Async: write KV cache for other isolates

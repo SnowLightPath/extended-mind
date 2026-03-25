@@ -234,7 +234,46 @@ function extractInstructions(coreText) {
   return output.join('\n');
 }
 
-export function assembleContext(core, active, sessions, changelog, reviewQueue) {
+function toLocalIso(utcIso, timezone) {
+  if (!timezone || !utcIso) return utcIso;
+  try {
+    const date = new Date(utcIso);
+    if (isNaN(date.getTime())) return utcIso;
+
+    const utcMs = date.getTime();
+    const utcRef = new Date(date.toLocaleString('en-US', { timeZone: 'UTC' }));
+    const tzRef = new Date(date.toLocaleString('en-US', { timeZone: timezone }));
+    const offsetMs = tzRef.getTime() - utcRef.getTime();
+
+    const local = new Date(utcMs + offsetMs);
+    const iso = local.toISOString().slice(0, 23); // remove 'Z'
+
+    const sign = offsetMs >= 0 ? '+' : '-';
+    const absMin = Math.abs(offsetMs / 60000);
+    const hh = String(Math.floor(absMin / 60)).padStart(2, '0');
+    const mm = String(Math.round(absMin % 60)).padStart(2, '0');
+
+    return `${iso}${sign}${hh}:${mm}`;
+  } catch {
+    return utcIso; // invalid timezone → fallback
+  }
+}
+
+function convertTimestamps(obj, timezone) {
+  if (!timezone || !obj || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) {
+    return obj.map((item) => convertTimestamps(item, timezone));
+  }
+  const result = { ...obj };
+  for (const key of ['timestamp', 'expires_at']) {
+    if (typeof result[key] === 'string') {
+      result[key] = toLocalIso(result[key], timezone);
+    }
+  }
+  return result;
+}
+
+export function assembleContext(core, active, sessions, changelog, reviewQueue, timezone) {
   const sections = [];
 
   const instructions = extractInstructions(core);
@@ -263,7 +302,7 @@ export function assembleContext(core, active, sessions, changelog, reviewQueue) 
   if (active) {
     const activeObj = JSON.parse(active);
     if (sessions) {
-      activeObj.sessions = JSON.parse(sessions);
+      activeObj.sessions = convertTimestamps(JSON.parse(sessions), timezone);
     } else if (!activeObj.sessions) {
       activeObj.sessions = [];
     }
@@ -279,7 +318,8 @@ export function assembleContext(core, active, sessions, changelog, reviewQueue) 
     const changes = JSON.parse(changelog);
     const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
     const recent = changes.filter((c) => new Date(c.timestamp).getTime() > weekAgo);
-    sections.push(recent.length > 0 ? toYaml({ changes: recent }) : 'changes: []');
+    const localRecent = convertTimestamps(recent, timezone);
+    sections.push(localRecent.length > 0 ? toYaml({ changes: localRecent }) : 'changes: []');
   } else {
     sections.push('changes: []');
   }
@@ -305,7 +345,7 @@ export function assembleContext(core, active, sessions, changelog, reviewQueue) 
       sections.push(
         '# Unresolved contradictions. Investigate and resolve via context_log.',
       );
-      sections.push(toYaml({ review_queue: queue }));
+      sections.push(toYaml({ review_queue: convertTimestamps(queue, timezone) }));
       sections.push('</review>');
     }
   }
