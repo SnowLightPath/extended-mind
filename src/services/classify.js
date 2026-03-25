@@ -1,29 +1,65 @@
-const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages';
-const MODEL = 'claude-sonnet-4-6';
-
-export async function classifyMessage(env, message, currentActive) {
-  const response = await fetch(ANTHROPIC_API, {
-    method: 'POST',
-    headers: {
+const PROVIDERS = {
+  openai: {
+    url: 'https://api.openai.com/v1/responses',
+    defaultModel: 'gpt-5.4',
+    keyName: 'OPENAI_API_KEY',
+    buildHeaders: (apiKey) => ({
       'Content-Type': 'application/json',
-      'x-api-key': env.ANTHROPIC_API_KEY,
+      'Authorization': `Bearer ${apiKey}`,
+    }),
+    buildBody: (model, system, message) => ({
+      model,
+      reasoning: { effort: 'medium' },
+      input: [
+        { role: 'system', content: system },
+        { role: 'user', content: message },
+      ],
+      max_output_tokens: 1000,
+    }),
+    parseText: (data) => data.output_text,
+  },
+  anthropic: {
+    url: 'https://api.anthropic.com/v1/messages',
+    defaultModel: 'claude-sonnet-4-6',
+    keyName: 'ANTHROPIC_API_KEY',
+    buildHeaders: (apiKey) => ({
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: MODEL,
+    }),
+    buildBody: (model, system, message) => ({
+      model,
       max_tokens: 1000,
-      system: buildSystemPrompt(currentActive),
+      system,
       messages: [{ role: 'user', content: message }],
     }),
+    parseText: (data) => data.content[0].text,
+  },
+};
+
+export async function classifyMessage(env, message, currentActive) {
+  const providerName = env.CLASSIFY_PROVIDER || 'openai';
+  const provider = PROVIDERS[providerName];
+  if (!provider) throw new Error(`Unknown classify provider: ${providerName}`);
+
+  const model = env.CLASSIFY_MODEL || provider.defaultModel;
+  const apiKey = env[provider.keyName];
+  if (!apiKey) throw new Error(`Missing secret: ${provider.keyName}`);
+
+  const system = buildSystemPrompt(currentActive);
+  const response = await fetch(provider.url, {
+    method: 'POST',
+    headers: provider.buildHeaders(apiKey),
+    body: JSON.stringify(provider.buildBody(model, system, message)),
   });
 
   if (!response.ok) {
     const err = await response.text();
-    throw new Error(`Claude API ${response.status}: ${err}`);
+    throw new Error(`${providerName} API ${response.status}: ${err}`);
   }
 
   const data = await response.json();
-  const text = data.content[0].text;
+  const text = provider.parseText(data);
   const clean = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
   return JSON.parse(clean);
 }

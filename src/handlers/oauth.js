@@ -1,4 +1,4 @@
-import { getAuthSession, constantTimeEqual } from '../utils/auth.js';
+import { getAuthSession, constantTimeEqual, randomHex } from '../utils/auth.js';
 
 const CODE_TTL = 600;
 const CSRF_TTL = 600;
@@ -21,12 +21,6 @@ function oauthError(error, description, status = 400) {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
-}
-
-function randomHex(bytes) {
-  const buf = new Uint8Array(bytes);
-  crypto.getRandomValues(buf);
-  return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 function escapeHtml(str) {

@@ -3,8 +3,6 @@ import { tools } from './tools.js';
 import { handleGet } from './handlers/get.js';
 import { handlePut } from './handlers/put.js';
 import { handleAuthorizeGet, handleAuthorizePost, handleToken, handleRevoke } from './handlers/oauth.js';
-const SERVER_INFO = { name: 'extended-mind', version: '1.0.0' };
-
 function json(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
     status,
@@ -141,7 +139,6 @@ export default {
 
     switch (body.method) {
       case 'initialize': {
-        const clientVersion = body.params?.protocolVersion || 'unknown';
         const platform = body.params?.clientInfo?.name || 'unknown';
         const sessionId = btoa(JSON.stringify({ p: auth.platform || platform }));
         const iconUrl = `${url.protocol}//${url.host}/icon.svg`;

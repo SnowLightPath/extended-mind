@@ -54,14 +54,14 @@ You switch between Claude Chat, Claude Code, ChatGPT, Codex. Each session starts
                   |                   |
                   |  context_get ---->| cached response (~30ms)
                   |  context_log ---->| async write (~30ms response)
-                  |                   |   +-> Claude classify (async)
+                  |                   |   +-> LLM classify (async)
                   |                   |   +-> GitHub backup (async)
                   +-------------------+
 ```
 
 - **⚡ KV** — hot storage for all reads/writes
 - **📦 GitHub** — async version history backup (your private data repo)
-- **🔍 Claude API** — classifies logged messages, extracts priorities, detects contradictions
+- **🔍 LLM API** — classifies logged messages, extracts priorities, detects contradictions (configurable: OpenAI / Anthropic)
 - **🔑 WebAuthn** — passkey authentication (Touch ID / Face ID) on OAuth authorize
 - **🔗 OAuth 2.0** — authorization code flow for ChatGPT / Claude Chat, with `/oauth/revoke` (RFC 7009)
 
@@ -81,12 +81,14 @@ npx wrangler kv namespace create PCP
 # Set secrets
 npx wrangler secret put PCP_TOKEN         # your bearer token (generate any 64-char hex)
 npx wrangler secret put GITHUB_TOKEN      # GitHub PAT with repo scope
-npx wrangler secret put ANTHROPIC_API_KEY
+npx wrangler secret put OPENAI_API_KEY    # or ANTHROPIC_API_KEY depending on CLASSIFY_PROVIDER
 npx wrangler secret put WEBHOOK_SECRET    # GitHub webhook HMAC-SHA256 secret
 
 # Configure wrangler.toml
 # - Set KV namespace ID
 # - Set GITHUB_REPO to your private data repo (e.g., "yourname/my-mind")
+# - Set CLASSIFY_PROVIDER to "openai" or "anthropic" (default: openai)
+# - Optionally set CLASSIFY_MODEL to override (openai: gpt-5.4, anthropic: claude-sonnet-4-6)
 
 npx wrangler deploy
 ```
@@ -108,7 +110,7 @@ This enables automatic core sync: when you push changes to `seed/core.yaml`, the
 
 ### 3. Seed your context
 
-Edit `seed/core.yaml` with your identity. Copy `seed/active.example.json` to `seed/active.json` and edit with your work context. Place these in your private data repo (not this repo), then:
+Edit `seed/core.yaml` with your identity. Copy `seed/active.template.json` to `seed/active.json` and edit with your work context. Place these in your private data repo (not this repo), then:
 
 ```bash
 node seed/seed-kv.js
@@ -210,7 +212,7 @@ curl -s -X POST https://your-worker.workers.dev/mcp \
 
 When an AI calls `context_log`:
 1. Message stored **verbatim** in KV (async via `waitUntil`, ~30ms response)
-2. Claude API classifies in the background — updates priorities, flags contradictions
+2. LLM API classifies in the background — updates priorities, flags contradictions
 3. GitHub gets an async backup commit
 
 When an AI calls `context_get`:

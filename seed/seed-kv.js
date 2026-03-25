@@ -18,7 +18,7 @@ function kvPut(key, filePath) {
 // Seed core (template) and active (example) from files
 const files = {
   core: path.join(__dirname, 'core.yaml'),
-  active: path.join(__dirname, 'active.example.json'),
+  active: path.join(__dirname, 'active.template.json'),
 };
 
 for (const [key, file] of Object.entries(files)) {

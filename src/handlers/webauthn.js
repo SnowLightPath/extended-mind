@@ -1,19 +1,14 @@
 import { server } from '@passwordless-id/webauthn';
-import { getAuthSession, constantTimeEqual } from '../utils/auth.js';
+import { getAuthSession, constantTimeEqual, randomHex } from '../utils/auth.js';
 
 const CHALLENGE_TTL = 300;
+const SESSION_TTL = 600;
 
-function jsonResponse(body, status = 200) {
+function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
-}
-
-function randomHex(bytes) {
-  const buf = new Uint8Array(bytes);
-  crypto.getRandomValues(buf);
-  return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 function enrollPage(clientId, redirectUri, state, csrfToken) {
@@ -141,7 +136,7 @@ export async function handleRegisterBegin(request, env) {
   try {
     body = await request.json();
   } catch {
-    return jsonResponse({ error: 'Invalid JSON' }, 400);
+    return json({ error: 'Invalid JSON' }, 400);
   }
 
   const { auth_session_id, csrf_token } = body;
@@ -150,14 +145,14 @@ export async function handleRegisterBegin(request, env) {
   if (auth_session_id) {
     const authSession = await getAuthSession(env, auth_session_id);
     if (!authSession || authSession.csrf_token !== csrf_token) {
-      return jsonResponse({ error: 'Invalid auth session' }, 400);
+      return json({ error: 'Invalid auth session' }, 400);
     }
   } else if (csrf_token) {
     // Standalone /passkey flow (uses csrf: key)
     const csrfValid = await env.PCP.get(`csrf:${csrf_token}`);
-    if (csrfValid === null) return jsonResponse({ error: 'Invalid CSRF token' }, 400);
+    if (csrfValid === null) return json({ error: 'Invalid CSRF token' }, 400);
   } else {
-    return jsonResponse({ error: 'Missing authentication' }, 400);
+    return json({ error: 'Missing authentication' }, 400);
   }
 
   const url = new URL(request.url);
@@ -176,7 +171,7 @@ export async function handleRegisterBegin(request, env) {
     .replace(/\//g, '_')
     .replace(/=/g, '');
 
-  return jsonResponse({
+  return json({
     challenge,
     challenge_id: challengeId,
     rp: { name: 'Extended Mind', id: rpId },
@@ -200,23 +195,23 @@ export async function handleRegisterVerify(request, env) {
   try {
     body = await request.json();
   } catch {
-    return jsonResponse({ error: 'Invalid JSON' }, 400);
+    return json({ error: 'Invalid JSON' }, 400);
   }
 
   const { registration, challenge_id } = body;
 
   const challengeRaw = await env.PCP.get(`webauthn:challenge:${challenge_id}`);
-  if (!challengeRaw) return jsonResponse({ error: 'Challenge expired' }, 400);
+  if (!challengeRaw) return json({ error: 'Challenge expired' }, 400);
 
   let challengeData;
   try {
     challengeData = JSON.parse(challengeRaw);
   } catch {
-    return jsonResponse({ error: 'Invalid challenge' }, 400);
+    return json({ error: 'Invalid challenge' }, 400);
   }
   await env.PCP.delete(`webauthn:challenge:${challenge_id}`);
 
-  if (challengeData.type !== 'register') return jsonResponse({ error: 'Wrong challenge type' }, 400);
+  if (challengeData.type !== 'register') return json({ error: 'Wrong challenge type' }, 400);
 
   const url = new URL(request.url);
   const origin = `${url.protocol}//${url.host}`;
@@ -230,7 +225,7 @@ export async function handleRegisterVerify(request, env) {
       domain: url.hostname,
     });
   } catch (e) {
-    return jsonResponse({ error: 'Verification failed: ' + e.message }, 400);
+    return json({ error: 'Verification failed: ' + e.message }, 400);
   }
 
   await env.PCP.put(
@@ -250,7 +245,7 @@ export async function handleRegisterVerify(request, env) {
     : null;
 
   if (!authSession || !authSession.redirect_uri) {
-    return jsonResponse({ ok: true, credential_id: registrationInfo.credential.id });
+    return json({ ok: true, credential_id: registrationInfo.credential.id });
   }
 
   const code = randomHex(32);
@@ -261,7 +256,7 @@ export async function handleRegisterVerify(request, env) {
       redirect_uri: authSession.redirect_uri,
       created_at: Date.now(),
     }),
-    { expirationTtl: 600 },
+    { expirationTtl: SESSION_TTL },
   );
 
   const location = new URL(authSession.redirect_uri);
@@ -269,7 +264,7 @@ export async function handleRegisterVerify(request, env) {
   if (authSession.state) location.searchParams.set('state', authSession.state);
   await env.PCP.delete(`auth:session:${challengeData.auth_session_id}`);
 
-  return jsonResponse({ redirect: location.toString() });
+  return json({ redirect: location.toString() });
 }
 
 export async function handleAuthVerify(request, env) {
@@ -277,32 +272,32 @@ export async function handleAuthVerify(request, env) {
   try {
     body = await request.json();
   } catch {
-    return jsonResponse({ error: 'Invalid JSON' }, 400);
+    return json({ error: 'Invalid JSON' }, 400);
   }
 
   const { authentication, challenge_id } = body;
 
   const challengeRaw = await env.PCP.get(`webauthn:challenge:${challenge_id}`);
-  if (!challengeRaw) return jsonResponse({ error: 'Challenge expired' }, 400);
+  if (!challengeRaw) return json({ error: 'Challenge expired' }, 400);
 
   let challengeData;
   try {
     challengeData = JSON.parse(challengeRaw);
   } catch {
-    return jsonResponse({ error: 'Invalid challenge' }, 400);
+    return json({ error: 'Invalid challenge' }, 400);
   }
   await env.PCP.delete(`webauthn:challenge:${challenge_id}`);
 
-  if (challengeData.type !== 'authenticate') return jsonResponse({ error: 'Wrong challenge type' }, 400);
+  if (challengeData.type !== 'authenticate') return json({ error: 'Wrong challenge type' }, 400);
 
   const credentialRaw = await env.PCP.get(`webauthn:credential:${authentication.id}`);
-  if (!credentialRaw) return jsonResponse({ error: 'Unknown credential' }, 400);
+  if (!credentialRaw) return json({ error: 'Unknown credential' }, 400);
 
   let credentialData;
   try {
     credentialData = JSON.parse(credentialRaw);
   } catch {
-    return jsonResponse({ error: 'Invalid credential data' }, 400);
+    return json({ error: 'Invalid credential data' }, 400);
   }
 
   const url = new URL(request.url);
@@ -316,7 +311,7 @@ export async function handleAuthVerify(request, env) {
       { challenge: challengeData.challenge, origin, userVerified: true, counter: credentialData.counter, domain: url.hostname },
     );
   } catch (e) {
-    return jsonResponse({ error: 'Verification failed: ' + e.message }, 400);
+    return json({ error: 'Verification failed: ' + e.message }, 400);
   }
 
   await env.PCP.put(
@@ -325,7 +320,7 @@ export async function handleAuthVerify(request, env) {
   );
 
   const authSession = await getAuthSession(env, challengeData.auth_session_id);
-  if (!authSession) return jsonResponse({ error: 'Invalid auth session' }, 400);
+  if (!authSession) return json({ error: 'Invalid auth session' }, 400);
 
   const code = randomHex(32);
   await env.PCP.put(
@@ -335,7 +330,7 @@ export async function handleAuthVerify(request, env) {
       redirect_uri: authSession.redirect_uri,
       created_at: Date.now(),
     }),
-    { expirationTtl: 600 },
+    { expirationTtl: SESSION_TTL },
   );
 
   const location = new URL(authSession.redirect_uri);
@@ -343,7 +338,7 @@ export async function handleAuthVerify(request, env) {
   if (authSession.state) location.searchParams.set('state', authSession.state);
   await env.PCP.delete(`auth:session:${challengeData.auth_session_id}`);
 
-  return jsonResponse({ redirect: location.toString() });
+  return json({ redirect: location.toString() });
 }
 
 export async function handleAuthBegin(request, env) {
@@ -351,12 +346,12 @@ export async function handleAuthBegin(request, env) {
   try {
     body = await request.json();
   } catch {
-    return jsonResponse({ error: 'Invalid JSON' }, 400);
+    return json({ error: 'Invalid JSON' }, 400);
   }
 
   const { auth_session_id } = body;
   const authSession = await getAuthSession(env, auth_session_id);
-  if (!authSession) return jsonResponse({ error: 'Invalid auth session' }, 400);
+  if (!authSession) return json({ error: 'Invalid auth session' }, 400);
 
   const challenge = server.randomChallenge();
   const challengeId = randomHex(16);
@@ -367,7 +362,7 @@ export async function handleAuthBegin(request, env) {
     { expirationTtl: CHALLENGE_TTL },
   );
 
-  return jsonResponse({
+  return json({
     challenge,
     challenge_id: challengeId,
     timeout: 300000,
@@ -381,13 +376,13 @@ export async function handleSkip(request, env) {
   try {
     body = await request.json();
   } catch {
-    return jsonResponse({ error: 'Invalid JSON' }, 400);
+    return json({ error: 'Invalid JSON' }, 400);
   }
 
   const { auth_session_id, csrf_token } = body;
   const authSession = await getAuthSession(env, auth_session_id);
   if (!authSession || authSession.csrf_token !== csrf_token) {
-    return jsonResponse({ error: 'Invalid auth session' }, 400);
+    return json({ error: 'Invalid auth session' }, 400);
   }
 
   const code = randomHex(32);
@@ -398,7 +393,7 @@ export async function handleSkip(request, env) {
       redirect_uri: authSession.redirect_uri,
       created_at: Date.now(),
     }),
-    { expirationTtl: 600 },
+    { expirationTtl: SESSION_TTL },
   );
 
   const location = new URL(authSession.redirect_uri);
@@ -406,7 +401,7 @@ export async function handleSkip(request, env) {
   if (authSession.state) location.searchParams.set('state', authSession.state);
   await env.PCP.delete(`auth:session:${auth_session_id}`);
 
-  return jsonResponse({ redirect: location.toString() });
+  return json({ redirect: location.toString() });
 }
 
 function passkeyManagePage() {
@@ -552,19 +547,19 @@ async function handlePasskeyEnroll(request, env) {
   try {
     body = await request.json();
   } catch {
-    return jsonResponse({ error: 'Invalid JSON' }, 400);
+    return json({ error: 'Invalid JSON' }, 400);
   }
 
   if (body.action === 'auth') {
     if (!constantTimeEqual(body.token, env.PCP_TOKEN)) {
-      return jsonResponse({ error: 'Invalid token' }, 401);
+      return json({ error: 'Invalid token' }, 401);
     }
     const sessionToken = randomHex(16);
-    await env.PCP.put(`csrf:${sessionToken}`, '{}', { expirationTtl: 600 });
-    return jsonResponse({ session_token: sessionToken });
+    await env.PCP.put(`csrf:${sessionToken}`, '{}', { expirationTtl: SESSION_TTL });
+    return json({ session_token: sessionToken });
   }
 
-  return jsonResponse({ error: 'Unknown action' }, 400);
+  return json({ error: 'Unknown action' }, 400);
 }
 
 export { enrollPage, passkeyManagePage, handlePasskeyEnroll };
