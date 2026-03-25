@@ -3,6 +3,7 @@ import { invalidateCache } from '../utils/cache.js';
 const MAX_SESSIONS = 20;
 const MAX_CHANGELOG = 50;
 const MAX_MESSAGE_BYTES = 50 * 1024;
+const TTL_HOURS = 72;
 
 export async function handlePut(args, env, platform, ctx) {
   const { message } = args;
@@ -126,20 +127,42 @@ async function classifyAndUpdate(env, message, timestamp, platform) {
     await env.PCP.put('active', JSON.stringify(fresh));
     await invalidateCache(env);
 
+    // Reactive contradiction resolution + new contradiction handling
+    const freshQueueRaw = await env.PCP.get('review_queue');
+    let freshQueue = JSON.parse(freshQueueRaw || '[]');
+    const beforeLen = freshQueue.length;
+
+    // Reactive: auto-resolve structured contradictions whose expected value now matches active
+    let resolvedCount = 0;
+    freshQueue = freshQueue.filter((item) => {
+      if (!item.path || item.expected === undefined) return true;
+      const current = getNestedValue(fresh, item.path);
+      if (JSON.stringify(current) === JSON.stringify(item.expected)) {
+        resolvedCount++;
+        return false;
+      }
+      return true;
+    });
+
+    // Add new contradictions with TTL
     if (result.contradictions && result.contradictions.length > 0) {
-      const queueRaw = await env.PCP.get('review_queue');
-      const queue = JSON.parse(queueRaw || '[]');
       for (const c of result.contradictions) {
-        queue.push({
+        const item = typeof c === 'string' ? { issue: c } : c;
+        freshQueue.push({
           timestamp,
           platform,
           type: 'contradiction',
-          issue: c,
+          ...item,
           source_preview: message.slice(0, 200),
+          expires_at: new Date(Date.now() + TTL_HOURS * 3600000).toISOString(),
         });
       }
-      while (queue.length > 20) queue.shift();
-      await env.PCP.put('review_queue', JSON.stringify(queue));
+    }
+
+    const hasChanges = beforeLen !== freshQueue.length || (result.contradictions?.length > 0);
+    if (hasChanges) {
+      while (freshQueue.length > 20) freshQueue.shift();
+      await env.PCP.put('review_queue', JSON.stringify(freshQueue));
       await invalidateCache(env);
     }
 
@@ -147,10 +170,15 @@ async function classifyAndUpdate(env, message, timestamp, platform) {
       top_of_mind: result.top_of_mind?.length || 0,
       updates: result.active_updates?.length || 0,
       contradictions: result.contradictions?.length || 0,
+      resolved: resolvedCount,
     });
   } catch (err) {
     console.error('Classification failed:', err.message);
   }
+}
+
+function getNestedValue(obj, path) {
+  return path.split('.').reduce((o, k) => o?.[k], obj);
 }
 
 function applyUpdate(obj, path, value) {

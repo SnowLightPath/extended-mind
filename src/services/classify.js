@@ -95,11 +95,16 @@ Return {path, value} pairs using dot notation.
 ONLY include changes with clear, specific factual information. Do NOT infer or guess.
 
 ### 3. contradictions (required)
-Compare message against current active context. Flag ONLY specific factual contradictions:
-- Number mismatches (e.g., message says "5人" but active says 3)
-- Version conflicts
-- Role conflicts
-- Implicit arithmetic contradictions (e.g., "2 new members joined" when team count doesn't reflect this)
+Compare message against current active context. Flag ONLY specific factual contradictions.
+
+For each contradiction, return an object:
+- "issue" (required): Human-readable description of the contradiction
+- "path" (optional): Dot-notation path in active context where the conflict exists
+- "expected" (optional): The value the message claims is correct
+
+When path and expected are provided, the system can auto-resolve the contradiction
+when active context is later updated to match. Provide them whenever the contradiction
+maps to a specific active field.
 
 Do NOT flag:
 - Additions (new info not in active)
@@ -117,8 +122,9 @@ List related parts of active context using dot notation.
     {"path": "projects.agent_framework.version", "value": "0.3.3"}
   ],
   "contradictions": [
-    "Message says team_b has 5 members but active shows 3"
-  ],
+    {"path": "projects.team_b.count", "expected": 5, "issue": "message says 5 members but active shows 3"},
+    {"issue": "BRID-63 referenced but does not exist in Jira"}
+  ],  // structured (path+expected) → auto-resolvable; issue-only → TTL expiry
   "refs": ["projects.agent_framework"]
 }
 

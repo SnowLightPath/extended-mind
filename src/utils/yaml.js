@@ -286,10 +286,25 @@ export function assembleContext(core, active, sessions, changelog, reviewQueue) 
   sections.push('</changes>');
 
   if (reviewQueue) {
-    const queue = JSON.parse(reviewQueue);
+    let queue = JSON.parse(reviewQueue);
+    const now = Date.now();
+
+    // TTL: filter expired items (fallback to timestamp + 72h for legacy items)
+    queue = queue.filter((item) => {
+      const expiry = item.expires_at
+        ? new Date(item.expires_at).getTime()
+        : item.timestamp
+          ? new Date(item.timestamp).getTime() + 72 * 3600000
+          : Infinity;
+      return expiry > now;
+    });
+
     if (queue.length > 0) {
       sections.push('');
       sections.push('<review>');
+      sections.push(
+        '# Unresolved contradictions. Investigate and resolve via context_log.',
+      );
       sections.push(toYaml({ review_queue: queue }));
       sections.push('</review>');
     }
