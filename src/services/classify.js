@@ -111,9 +111,12 @@ ${JSON.stringify(compact)}`;
 }
 
 function buildSweepPrompt(currentActive) {
-  const compact = compactForClassify(currentActive);
+  // Exclude sessions from sweep — they are historical records, not current state
+  const { sessions, ...withoutSessions } = currentActive || {};
+  const compact = compactForClassify(withoutSessions);
   return `Consistency reviewer for a personal knowledge system.
-Review the context for internal contradictions, stale data, and outdated fields.
+Review ONLY the structured fields (not session logs) for internal contradictions.
+Sessions are historical records — do not use them to override current field values.
 
 Return JSON:
 - active_updates: [{path, value}] to fix stale values. Set value to null to remove outdated fields. High confidence only.
