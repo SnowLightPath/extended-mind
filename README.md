@@ -88,7 +88,7 @@ npx wrangler secret put WEBHOOK_SECRET    # GitHub webhook HMAC-SHA256 secret
 # - Set KV namespace ID
 # - Set GITHUB_REPO to your private data repo (e.g., "yourname/my-mind")
 # - Set CLASSIFY_PROVIDER to "openai" or "anthropic" (default: openai)
-# - Optionally set CLASSIFY_MODEL to override (openai: gpt-5.4, anthropic: claude-sonnet-4-6)
+# - Optionally set CLASSIFY_MODEL to override (openai: gpt-5.4-mini, anthropic: claude-sonnet-4-6)
 # - Optionally set CLASSIFY_REASONING_EFFORT for OpenAI (none/low/medium/high/xhigh, default: medium)
 # - Optionally set CLASSIFY_MAX_TOKENS (default: 16384 openai, 4096 anthropic)
 

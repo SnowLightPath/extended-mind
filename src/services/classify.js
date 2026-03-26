@@ -1,7 +1,7 @@
 const PROVIDERS = {
   openai: {
     url: 'https://api.openai.com/v1/responses',
-    defaultModel: 'gpt-4.1-mini',
+    defaultModel: 'gpt-5.4-mini',
     keyName: 'OPENAI_API_KEY',
     buildHeaders: (apiKey) => ({
       'Content-Type': 'application/json',
