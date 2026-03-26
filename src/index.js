@@ -29,6 +29,85 @@ function getPlatform(request, oauthPlatform) {
   }
 }
 
+async function syncCore(env) {
+  try {
+    const { getFile } = await import('./services/github.js');
+    const file = await getFile(env, 'seed/core.yaml');
+    if (!file) return;
+
+    const lastSha = await env.PCP.get('_core_sha');
+    if (file.sha !== lastSha) {
+      await env.PCP.put('core', file.content);
+      await env.PCP.put('_core_sha', file.sha);
+      const { invalidateCache } = await import('./utils/cache.js');
+      await invalidateCache(env);
+      console.log('Core synced via cron (SHA changed)');
+    }
+  } catch (err) {
+    console.error('Cron core sync failed:', err.message);
+  }
+}
+
+async function processPending(env) {
+  try {
+    const raw = await env.PCP.get('pending_classify');
+    if (!raw) return;
+    const queue = JSON.parse(raw);
+    if (queue.length === 0) return;
+
+    const { classifyMessage } = await import('./services/classify.js');
+    const { applyClassification } = await import('./handlers/put.js');
+
+    const item = queue.shift();
+    await env.PCP.put('pending_classify', JSON.stringify(queue));
+
+    const activeRaw = await env.PCP.get('active');
+    const active = JSON.parse(activeRaw || '{}');
+
+    const result = await classifyMessage(env, item.message, active);
+    await applyClassification(env, result, item.message, item.timestamp, item.platform);
+
+    console.log('Cron: classified pending from', item.platform, item.timestamp);
+  } catch (err) {
+    console.error('Cron classify failed:', err.message);
+  }
+}
+
+async function consistencySweep(env) {
+  try {
+    // Skip if review_queue is empty (no known contradictions to fix)
+    const queueRaw = await env.PCP.get('review_queue');
+    const queue = queueRaw ? JSON.parse(queueRaw) : [];
+    const hasUnresolved = queue.some((item) => item.path && item.expected !== undefined);
+
+    // Also check if last sweep found changes — if not, skip until next context_log triggers new data
+    const lastSweepResult = await env.PCP.get('_sweep_dirty');
+    if (!hasUnresolved && lastSweepResult !== 'true') return;
+
+    const activeRaw = await env.PCP.get('active');
+    if (!activeRaw) return;
+    const active = JSON.parse(activeRaw);
+
+    const { classifySweep } = await import('./services/classify.js');
+    const { applyClassification } = await import('./handlers/put.js');
+
+    const result = await classifySweep(env, active);
+
+    if (result.active_updates?.length > 0 || result.contradictions?.length > 0) {
+      await applyClassification(env, result, '[consistency sweep]', new Date().toISOString(), 'cron');
+      await env.PCP.put('_sweep_dirty', 'true');
+      console.log('Sweep:', {
+        updates: result.active_updates?.length || 0,
+        contradictions: result.contradictions?.length || 0,
+      });
+    } else {
+      await env.PCP.put('_sweep_dirty', 'false');
+    }
+  } catch (err) {
+    console.error('Sweep failed:', err.message);
+  }
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -189,21 +268,6 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    try {
-      const { getFile } = await import('./services/github.js');
-      const file = await getFile(env, 'seed/core.yaml');
-      if (!file) return;
-
-      const lastSha = await env.PCP.get('_core_sha');
-      if (file.sha !== lastSha) {
-        await env.PCP.put('core', file.content);
-        await env.PCP.put('_core_sha', file.sha);
-        const { invalidateCache } = await import('./utils/cache.js');
-        await invalidateCache(env);
-        console.log('Core synced via cron (SHA changed)');
-      }
-    } catch (err) {
-      console.error('Cron sync failed:', err.message);
-    }
+    await Promise.allSettled([syncCore(env), processPending(env), consistencySweep(env)]);
   },
 };

@@ -1,22 +1,28 @@
 const PROVIDERS = {
   openai: {
     url: 'https://api.openai.com/v1/responses',
-    defaultModel: 'gpt-5.4',
+    defaultModel: 'gpt-4.1-mini',
     keyName: 'OPENAI_API_KEY',
     buildHeaders: (apiKey) => ({
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
+      Authorization: `Bearer ${apiKey}`,
     }),
-    buildBody: (model, system, message, env) => ({
-      model,
-      reasoning: { effort: env.CLASSIFY_REASONING_EFFORT || 'medium' },
-      input: [
-        { role: 'system', content: system },
-        { role: 'user', content: message },
-      ],
-      text: { format: { type: 'text' } },
-      max_output_tokens: parseInt(env.CLASSIFY_MAX_TOKENS || '16384'),
-    }),
+    buildBody: (model, system, message, env) => {
+      const body = {
+        model,
+        input: [
+          { role: 'system', content: system },
+          { role: 'user', content: message },
+        ],
+        text: { format: { type: 'json_object' } },
+        max_output_tokens: parseInt(env.CLASSIFY_MAX_TOKENS || '4096'),
+      };
+      const effort = env.CLASSIFY_REASONING_EFFORT;
+      if (effort) {
+        body.reasoning = { effort };
+      }
+      return body;
+    },
     parseText: (data) => {
       const msg = data.output.find((o) => o.type === 'message');
       return msg?.content?.[0]?.text;
@@ -41,7 +47,7 @@ const PROVIDERS = {
   },
 };
 
-export async function classifyMessage(env, message, currentActive) {
+async function callProvider(env, system, message) {
   const providerName = env.CLASSIFY_PROVIDER || 'openai';
   const provider = PROVIDERS[providerName];
   if (!provider) throw new Error(`Unknown classify provider: ${providerName}`);
@@ -50,7 +56,6 @@ export async function classifyMessage(env, message, currentActive) {
   const apiKey = env[provider.keyName];
   if (!apiKey) throw new Error(`Missing secret: ${provider.keyName}`);
 
-  const system = buildSystemPrompt(currentActive);
   const response = await fetch(provider.url, {
     method: 'POST',
     headers: provider.buildHeaders(apiKey),
@@ -65,71 +70,77 @@ export async function classifyMessage(env, message, currentActive) {
   const data = await response.json();
   const text = provider.parseText(data);
   if (!text) {
-    throw new Error(`${providerName}: empty classification response`);
+    throw new Error(`${providerName}: empty response`);
   }
-  const clean = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-  return JSON.parse(clean);
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    const clean = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    return JSON.parse(clean);
+  }
+}
+
+export async function classifyMessage(env, message, currentActive) {
+  return callProvider(env, buildSystemPrompt(currentActive), message);
+}
+
+export async function classifySweep(env, currentActive) {
+  return callProvider(
+    env,
+    buildSweepPrompt(currentActive),
+    'Review active context for internal consistency.',
+  );
 }
 
 function buildSystemPrompt(currentActive) {
-  return `You are a context classifier for a personal context protocol.
-You receive a message that was stored verbatim. Your job is to extract metadata ONLY.
-You NEVER modify the original message.
+  const compact = compactForClassify(currentActive);
+  return `Context classifier for a personal knowledge system.
+Extract structured metadata from a log message. Never modify the original.
 
-## Tasks
+Return JSON:
+- top_of_mind: 3-5 priority tags (max 15 words). Keep relevant, replace superseded, add new.
+- active_updates: [{path, value}] for factual changes (dot notation). Explicit facts only. Set value to null to remove stale fields.
+- contradictions: [{path, expected, issue}] when mappable to a context field. {issue} only when unmappable. Ignore additions, elaborations, opinions.
+- refs: [path] related context paths.
 
-### 1. top_of_mind (required)
-Extract 3-5 short tags (max 15 words each) representing current priorities, action items, or active concerns.
-Compare with existing top_of_mind:
-- Keep items still relevant
-- Replace items superseded by new information
-- Add new items from this message
+Empty arrays when nothing found.
 
-### 2. active_updates (required)
-Detect factual updates to active context:
-- Project version changes (e.g., "v0.3.3 released")
-- Team changes (e.g., "new member joined team_b")
-- Colleague role changes
-- Organizational changes
-Return {path, value} pairs using dot notation.
-ONLY include changes with clear, specific factual information. Do NOT infer or guess.
-
-### 3. contradictions (required)
-Compare message against current active context. Flag ONLY specific factual contradictions.
-
-For each contradiction, return an object:
-- "issue" (required): Human-readable description of the contradiction
-- "path" (optional): Dot-notation path in active context where the conflict exists
-- "expected" (optional): The value the message claims is correct
-
-When path and expected are provided, the system can auto-resolve the contradiction
-when active context is later updated to match. Provide them whenever the contradiction
-maps to a specific active field.
-
-Do NOT flag:
-- Additions (new info not in active)
-- Elaborations (more detail about existing info)
-- Opinions or assessments
-
-### 4. refs (required)
-List related parts of active context using dot notation.
-
-## Output: JSON ONLY. No markdown, no explanation.
-
-{
-  "top_of_mind": ["item 1", "item 2", "item 3"],
-  "active_updates": [
-    {"path": "projects.agent_framework.version", "value": "0.3.3"}
-  ],
-  "contradictions": [
-    {"path": "projects.team_b.count", "expected": 5, "issue": "message says 5 members but active shows 3"},
-    {"issue": "BRID-63 referenced but does not exist in Jira"}
-  ],  // structured (path+expected) → auto-resolvable; issue-only → TTL expiry
-  "refs": ["projects.agent_framework"]
+Context:
+${JSON.stringify(compact)}`;
 }
 
-Empty arrays if nothing found.
+function buildSweepPrompt(currentActive) {
+  const compact = compactForClassify(currentActive);
+  return `Consistency reviewer for a personal knowledge system.
+Review the context for internal contradictions, stale data, and outdated fields.
 
-## Current active context
-${JSON.stringify(currentActive, null, 2)}`;
+Return JSON:
+- active_updates: [{path, value}] to fix stale values. Set value to null to remove outdated fields. High confidence only.
+- contradictions: [{path, expected, issue}] for inconsistencies found.
+
+Empty arrays when clean.
+
+Context:
+${JSON.stringify(compact)}`;
+}
+
+function compactForClassify(active) {
+  if (!active || typeof active !== 'object') return {};
+  return truncateDeep(active, 100);
+}
+
+function truncateDeep(obj, maxLen) {
+  if (typeof obj === 'string') {
+    return obj.length > maxLen ? obj.slice(0, maxLen) + '…' : obj;
+  }
+  if (Array.isArray(obj)) return obj.map((v) => truncateDeep(v, maxLen));
+  if (typeof obj === 'object' && obj !== null) {
+    const out = {};
+    for (const [k, v] of Object.entries(obj)) {
+      out[k] = truncateDeep(v, maxLen);
+    }
+    return out;
+  }
+  return obj;
 }
