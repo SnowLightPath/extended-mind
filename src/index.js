@@ -75,14 +75,9 @@ async function processPending(env) {
 
 async function consistencySweep(env) {
   try {
-    // Skip if review_queue is empty (no known contradictions to fix)
-    const queueRaw = await env.PCP.get('review_queue');
-    const queue = queueRaw ? JSON.parse(queueRaw) : [];
-    const hasUnresolved = queue.some((item) => item.path && item.expected !== undefined);
-
-    // Also check if last sweep found changes — if not, skip until next context_log triggers new data
-    const lastSweepResult = await env.PCP.get('_sweep_dirty');
-    if (!hasUnresolved && lastSweepResult !== 'true') return;
+    // Only sweep when new data arrived via context_log
+    const dirty = await env.PCP.get('_sweep_dirty');
+    if (dirty !== 'true') return;
 
     const activeRaw = await env.PCP.get('active');
     if (!activeRaw) return;
@@ -95,14 +90,14 @@ async function consistencySweep(env) {
 
     if (result.active_updates?.length > 0 || result.contradictions?.length > 0) {
       await applyClassification(env, result, '[consistency sweep]', new Date().toISOString(), 'cron');
-      await env.PCP.put('_sweep_dirty', 'true');
       console.log('Sweep:', {
         updates: result.active_updates?.length || 0,
         contradictions: result.contradictions?.length || 0,
       });
-    } else {
-      await env.PCP.put('_sweep_dirty', 'false');
     }
+
+    // Always clear after sweep — next context_log will re-set if needed
+    await env.PCP.put('_sweep_dirty', 'false');
   } catch (err) {
     console.error('Sweep failed:', err.message);
   }

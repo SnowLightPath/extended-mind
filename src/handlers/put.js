@@ -144,18 +144,19 @@ export async function applyClassification(env, result, message, timestamp, platf
   const freshRaw = await env.PCP.get('active');
   const fresh = JSON.parse(freshRaw || '{}');
 
+  let activeChanged = false;
+
   if (result.top_of_mind?.length > 0) {
     fresh.top_of_mind = result.top_of_mind;
+    activeChanged = true;
   }
 
   if (result.active_updates?.length > 0) {
     for (const update of result.active_updates) {
       if (update.path) applyUpdate(fresh, update.path, update.value);
     }
+    activeChanged = true;
   }
-
-  await env.PCP.put('active', JSON.stringify(fresh));
-  await invalidateCache(env);
 
   // Auto-heal: structured contradictions → apply expected as update
   let healedCount = 0;
@@ -166,13 +167,10 @@ export async function applyClassification(env, result, message, timestamp, platf
         healedCount++;
       }
     }
-    if (healedCount > 0) {
-      await env.PCP.put('active', JSON.stringify(fresh));
-      await invalidateCache(env);
-    }
+    if (healedCount > 0) activeChanged = true;
   }
 
-  // Contradiction processing: TTL cleanup → add new → reactive resolve
+  // Contradiction processing: TTL cleanup → add new (with dedup) → reactive resolve
   const freshQueueRaw = await env.PCP.get('review_queue');
   let freshQueue = JSON.parse(freshQueueRaw || '[]');
 
@@ -193,13 +191,27 @@ export async function applyClassification(env, result, message, timestamp, platf
   if (result.contradictions?.length > 0) {
     for (const contradiction of result.contradictions) {
       const item = typeof contradiction === 'string' ? { issue: contradiction } : contradiction;
+
+      // Deduplicate: if a structured contradiction with the same path exists, refresh TTL
+      if (item.path) {
+        const existingIdx = freshQueue.findIndex(
+          (q) => q.type === 'contradiction' && q.path === item.path
+        );
+        if (existingIdx !== -1) {
+          freshQueue[existingIdx].expires_at = new Date(now + TTL_HOURS * 3600000).toISOString();
+          freshQueue[existingIdx].expected = item.expected;
+          freshQueue[existingIdx].issue = item.issue;
+          continue;
+        }
+      }
+
       freshQueue.push({
         timestamp,
         platform,
         type: 'contradiction',
         ...item,
         source_preview: message.slice(0, 200),
-        expires_at: new Date(Date.now() + TTL_HOURS * 3600000).toISOString(),
+        expires_at: new Date(now + TTL_HOURS * 3600000).toISOString(),
       });
     }
   }
@@ -216,10 +228,17 @@ export async function applyClassification(env, result, message, timestamp, platf
     return true;
   });
 
-  const hasChanges = ttlRemoved > 0 || beforeLen !== freshQueue.length || (result.contradictions?.length > 0);
-  if (hasChanges) {
+  const queueChanged = ttlRemoved > 0 || beforeLen !== freshQueue.length || (result.contradictions?.length > 0);
+
+  // Consolidated writes: each key written at most once
+  if (activeChanged) {
+    await env.PCP.put('active', JSON.stringify(fresh));
+  }
+  if (queueChanged) {
     while (freshQueue.length > 20) freshQueue.shift();
     await env.PCP.put('review_queue', JSON.stringify(freshQueue));
+  }
+  if (activeChanged || queueChanged) {
     await invalidateCache(env);
   }
 
