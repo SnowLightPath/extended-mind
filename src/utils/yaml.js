@@ -36,7 +36,7 @@ function flowValue(v) {
 }
 
 function flowObject(obj) {
-  const pairs = Object.entries(obj).map(([k, v]) => `${k}: ${flowValue(v)}`);
+  const pairs = Object.entries(obj).map(([k, v]) => `${q(k, true)}: ${flowValue(v)}`);
   return `{ ${pairs.join(', ')} }`;
 }
 
@@ -91,18 +91,19 @@ export function toYaml(value, indent = 0) {
 
   return Object.entries(value)
     .map(([key, val]) => {
-      if (val === null || val === undefined) return `${pad}${key}: null`;
-      if (typeof val !== 'object') return `${pad}${key}: ${q(val)}`;
+      const k = q(key);
+      if (val === null || val === undefined) return `${pad}${k}: null`;
+      if (typeof val !== 'object') return `${pad}${k}: ${q(val)}`;
 
       if (Array.isArray(val)) {
-        if (val.length === 0) return `${pad}${key}: []`;
+        if (val.length === 0) return `${pad}${k}: []`;
         const rendered = toYaml(val, indent + 1);
-        if (rendered.startsWith('[')) return `${pad}${key}: ${rendered}`;
-        return `${pad}${key}:\n${rendered}`;
+        if (rendered.startsWith('[')) return `${pad}${k}: ${rendered}`;
+        return `${pad}${k}:\n${rendered}`;
       }
 
-      if (isLeaf(val)) return `${pad}${key}: ${flowObject(val)}`;
-      return `${pad}${key}:\n${toYaml(val, indent + 1)}`;
+      if (isLeaf(val)) return `${pad}${k}: ${flowObject(val)}`;
+      return `${pad}${k}:\n${toYaml(val, indent + 1)}`;
     })
     .join('\n');
 }
@@ -300,34 +301,38 @@ export function assembleContext(core, active, sessions, changelog, reviewQueue, 
 
   sections.push('');
   sections.push('<active>');
-  if (active) {
-    const activeObj = JSON.parse(active);
-    if (sessions) {
-      activeObj.sessions = convertTimestamps(JSON.parse(sessions), timezone);
-    } else if (!activeObj.sessions) {
-      activeObj.sessions = [];
-    }
+  try {
+    const activeObj = active ? JSON.parse(active) || {} : {};
+    const sessionsArr = sessions ? JSON.parse(sessions) || [] : [];
+    activeObj.sessions = Array.isArray(sessionsArr)
+      ? convertTimestamps(sessionsArr, timezone)
+      : [];
     sections.push(toYaml(activeObj));
-  } else {
+  } catch {
     sections.push('sessions: []');
   }
   sections.push('</active>');
 
   sections.push('');
   sections.push('<changes>');
-  if (changelog) {
-    const changes = JSON.parse(changelog);
-    const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    const recent = changes.filter((c) => new Date(c.timestamp).getTime() > weekAgo);
-    const localRecent = convertTimestamps(recent, timezone);
-    sections.push(localRecent.length > 0 ? toYaml({ changes: localRecent }) : 'changes: []');
-  } else {
+  try {
+    const changes = changelog ? JSON.parse(changelog) || [] : [];
+    if (Array.isArray(changes)) {
+      const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      const recent = changes.filter((c) => new Date(c.timestamp).getTime() > weekAgo);
+      const localRecent = convertTimestamps(recent, timezone);
+      sections.push(localRecent.length > 0 ? toYaml({ changes: localRecent }) : 'changes: []');
+    } else {
+      sections.push('changes: []');
+    }
+  } catch {
     sections.push('changes: []');
   }
   sections.push('</changes>');
 
-  if (reviewQueue) {
-    let queue = JSON.parse(reviewQueue);
+  try {
+    let queue = reviewQueue ? JSON.parse(reviewQueue) || [] : [];
+    if (!Array.isArray(queue)) queue = [];
     const now = Date.now();
 
     // TTL: filter expired items (fallback to timestamp + 72h for legacy items)
@@ -349,6 +354,8 @@ export function assembleContext(core, active, sessions, changelog, reviewQueue, 
       sections.push(toYaml({ review_queue: convertTimestamps(queue, timezone) }));
       sections.push('</review>');
     }
+  } catch {
+    // corrupted review_queue — skip section
   }
 
   return sections.join('\n');

@@ -221,7 +221,8 @@ export async function applyClassification(env, result, message, timestamp, platf
   freshQueue = freshQueue.filter((item) => {
     if (!item.path || item.expected === undefined) return true;
     const current = getNestedValue(fresh, item.path);
-    if (JSON.stringify(current) === JSON.stringify(item.expected)) {
+    const currentNorm = current === undefined ? null : current;
+    if (JSON.stringify(currentNorm) === JSON.stringify(item.expected)) {
       resolvedCount++;
       return false;
     }
@@ -264,8 +265,11 @@ function getNestedValue(obj, path) {
   return path.split('.').reduce((o, k) => o?.[k], obj);
 }
 
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 function applyUpdate(obj, path, value) {
   const keys = path.split('.');
+  if (keys.some((k) => UNSAFE_KEYS.has(k))) return;
   let current = obj;
   for (let i = 0; i < keys.length - 1; i++) {
     if (!(keys[i] in current) || typeof current[keys[i]] !== 'object') {

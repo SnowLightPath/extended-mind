@@ -58,8 +58,7 @@ async function processPending(env) {
     const { classifyMessage } = await import('./services/classify.js');
     const { applyClassification } = await import('./handlers/put.js');
 
-    const item = queue.shift();
-    await env.PCP.put('pending_classify', JSON.stringify(queue));
+    const item = queue[0];
 
     const activeRaw = await env.PCP.get('active');
     const active = JSON.parse(activeRaw || '{}');
@@ -69,6 +68,10 @@ async function processPending(env) {
     if (result.contradictions?.length > 0 || result.active_updates?.length > 0) {
       await env.PCP.put('_sweep_dirty', 'true');
     }
+
+    // Dequeue after successful processing to prevent message loss on failure
+    queue.shift();
+    await env.PCP.put('pending_classify', JSON.stringify(queue));
 
     console.log('Cron: classified pending from', item.platform, item.timestamp);
   } catch (err) {
