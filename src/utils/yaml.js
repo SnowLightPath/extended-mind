@@ -4,6 +4,7 @@ function needsQuote(s, inFlow) {
   if (s === 'true' || s === 'false' || s === 'null') return true;
   if (/^\d/.test(s)) return true;
   if (inFlow && /[,{}[\]]/.test(s)) return true;
+  if (/[\n\r\t]/.test(s)) return true;
   if (/: /.test(s) || /^[&*!|>'"%@`?-]/.test(s) || s.includes('#')) return true;
   return false;
 }
@@ -11,7 +12,7 @@ function needsQuote(s, inFlow) {
 function q(s, inFlow = false) {
   if (typeof s !== 'string') return String(s ?? 'null');
   if (!needsQuote(s, inFlow)) return s;
-  return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t')}"`;
 }
 
 function isLeaf(obj) {

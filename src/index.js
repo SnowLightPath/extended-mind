@@ -66,6 +66,9 @@ async function processPending(env) {
 
     const result = await classifyMessage(env, item.message, active);
     await applyClassification(env, result, item.message, item.timestamp, item.platform);
+    if (result.contradictions?.length > 0 || result.active_updates?.length > 0) {
+      await env.PCP.put('_sweep_dirty', 'true');
+    }
 
     console.log('Cron: classified pending from', item.platform, item.timestamp);
   } catch (err) {
@@ -263,6 +266,8 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    await Promise.allSettled([syncCore(env), processPending(env), consistencySweep(env)]);
+    await syncCore(env);
+    await processPending(env);
+    await consistencySweep(env);
   },
 };

@@ -48,7 +48,14 @@ async function processWebhook(payload, env) {
     const { getFileFromRepo } = await import('../services/github.js');
     let file = await getFileFromRepo(env, sourceRepo, 'active.json');
     if (file) {
-      try { JSON.parse(file.content); } catch { results.push('active.json invalid JSON, skipped'); file = null; }
+      try {
+        const parsed = JSON.parse(file.content);
+        delete parsed.sessions;
+        file.content = JSON.stringify(parsed);
+      } catch {
+        results.push('active.json invalid JSON, skipped');
+        file = null;
+      }
     }
     if (file) {
       await env.PCP.put('active', file.content);
