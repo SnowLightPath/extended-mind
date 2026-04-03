@@ -21,6 +21,58 @@ ontology:
   water_channel:
     principle: "design conditions through which things flow, don't control agents"
 
+# Schema is illustrative — fields vary by observation depth.
+# Fully observed stakeholders (e.g. person_a) have all fields;
+# partially observed ones have subsets. Add fields as observations accumulate.
+world_model:
+  stakeholders:
+    person_a:
+      role: "Role title and organization"
+      base: "Location"
+      cognitive:
+        model: "Core cognitive model (e.g. two-layer, mode-switching)"
+        interface: "Observable behavior pattern"
+        kernel: "Hidden decision structure"
+      triggers:
+        - "Emotional/engagement trigger 1"
+        - "Trigger 2"
+      evaluation:
+        sees: "What this person notices and values"
+        misses: "What this person overlooks or underweights"
+      decision:
+        fast: "Domain of rapid judgments"
+        slow: "Domain of deliberate judgments"
+        pattern: "Decision-making sequence"
+        boundary: "What is moveable vs immovable"
+      communication:
+        dictionary:
+          phrase_they_say: "what they actually mean"
+        content:
+          selection: "What content they want to see"
+          framing: "Format constraints (word count, headline style)"
+          tone: "Tone rules and prohibitions"
+        visual: "Visual/readability requirements"
+      relationships:
+        with_user: "Key dynamic with you"
+        with_others:
+          person_b: "Relationship summary"
+      prohibitions:
+        - "What NOT to do with this person"
+    person_b:
+      role: "Role title"
+      cognitive:
+        model: "Cognitive model description"
+      # depth varies by observation level
+
+  organizations:
+    org_a:
+      purpose: "Central question or mission"
+      structure: "How it is organized"
+      entities: ["Entity 1", "Entity 2"]
+      dynamics: "Key tensions or pathologies"
+      priorities:
+        - "Priority 1 — timeline"
+
 interaction:
   tone:
     register: "your preferred register (e.g. peer experts, formal, casual)"
