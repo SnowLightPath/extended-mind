@@ -40,7 +40,7 @@ function flowObject(obj) {
   return `{ ${pairs.join(', ')} }`;
 }
 
-export function toYaml(value, indent = 0) {
+function toYaml(value, indent = 0) {
   const pad = '  '.repeat(indent);
 
   if (value === null || value === undefined) return 'null';
@@ -108,7 +108,7 @@ export function toYaml(value, indent = 0) {
     .join('\n');
 }
 
-const SECTION_KEYS = ['tone:', 'question_reading:', 'shape:', 'integrity:', 'intellectual:'];
+const SECTION_KEYS = ['tone:', 'question_reading:', 'shape:', 'integrity:', 'intellectual:', 'lexical_avoid:', 'japanese:'];
 
 function detectSection(trimmed) {
   for (const key of SECTION_KEYS) {
@@ -121,7 +121,7 @@ function extractInstructions(coreText) {
   if (!coreText) return null;
 
   const lines = coreText.split('\n');
-  const data = { tone: [], question_reading: [], shape: [], integrity: [], intellectual: [] };
+  const data = { tone: [], question_reading: [], shape: [], integrity: [], intellectual: [], lexical_avoid: [], japanese: [] };
   let current = null;
   let currentIndent = 0;
 
@@ -182,6 +182,19 @@ function extractInstructions(coreText) {
           last[last.length - 1] += (last[last.length - 1] ? ' ' : '') + trimmed;
         }
       }
+    } else if (current === 'lexical_avoid') {
+      if (trimmed.startsWith('- ')) {
+        let text = trimmed.slice(2).trim();
+        if (text.startsWith('"') && text.endsWith('"')) text = text.slice(1, -1);
+        if (text.startsWith("'") && text.endsWith("'")) text = text.slice(1, -1);
+        data.lexical_avoid.push(text);
+      }
+    } else if (current === 'japanese') {
+      const match = trimmed.match(/^(?:writing|document|adaptation):\s*(.+)/);
+      if (match) {
+        const val = match[1].replace(/^["']|["']$/g, '');
+        if (val) data.japanese.push(val);
+      }
     }
   }
 
@@ -192,9 +205,10 @@ function extractInstructions(coreText) {
   output.push('# INSTRUCTIONS');
   output.push('');
 
-  if (data.tone.length > 0) {
+  if (data.tone.length > 0 || data.lexical_avoid.length > 0) {
     output.push('## Tone');
     for (const item of data.tone) output.push(`- ${item}`);
+    for (const item of data.lexical_avoid) output.push(`- 禁止: ${item}`);
     output.push('');
   }
 
@@ -231,6 +245,12 @@ function extractInstructions(coreText) {
       for (let i = 0; i < items.length; i++) output.push(`${i + 1}. ${items[i]}`);
       output.push('');
     }
+  }
+
+  if (data.japanese.length > 0) {
+    output.push('## Japanese');
+    for (const item of data.japanese) output.push(`- ${item}`);
+    output.push('');
   }
 
   return output.join('\n');
@@ -275,7 +295,7 @@ function convertTimestamps(obj, timezone) {
   return result;
 }
 
-export function assembleContext(core, active, sessions, changelog, reviewQueue, timezone) {
+export function assembleContext(core, active, sessions, timezone) {
   const sections = [];
 
   const instructions = extractInstructions(core);
@@ -300,63 +320,31 @@ export function assembleContext(core, active, sessions, changelog, reviewQueue, 
   sections.push('</core>');
 
   sections.push('');
-  sections.push('<active>');
   try {
     const activeObj = active ? JSON.parse(active) || {} : {};
-    const sessionsArr = sessions ? JSON.parse(sessions) || [] : [];
-    activeObj.sessions = Array.isArray(sessionsArr)
-      ? convertTimestamps(sessionsArr, timezone)
-      : [];
-    sections.push(toYaml(activeObj));
+    const visibleEntries = (activeObj.entries || []).filter(e => e.tag !== 'stale');
+    const localEntries = visibleEntries.map(e => ({
+      id: e.id,
+      date: toLocalIso(e.date, timezone) || e.date,
+      data: e.data,
+    }));
+    const displayActive = { entries: localEntries };
+    if (activeObj.conflicts && activeObj.conflicts.length > 0) {
+      displayActive.conflicts = activeObj.conflicts.map(c => ({
+        ids: c.ids,
+        issue: c.issue,
+      }));
+    }
+    const sessionsArr = sessions ? JSON.parse(sessions) : [];
+    const localSessions = convertTimestamps(sessionsArr, timezone);
+    displayActive.sessions = localSessions;
+    sections.push(`<active>\n${toYaml(displayActive)}\n</active>`);
   } catch {
+    sections.push('<active>');
     sections.push('sessions: []');
+    sections.push('</active>');
   }
-  sections.push('</active>');
 
-  sections.push('');
-  sections.push('<changes>');
-  try {
-    const changes = changelog ? JSON.parse(changelog) || [] : [];
-    if (Array.isArray(changes)) {
-      const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-      const recent = changes.filter((c) => new Date(c.timestamp).getTime() > weekAgo);
-      const localRecent = convertTimestamps(recent, timezone);
-      sections.push(localRecent.length > 0 ? toYaml({ changes: localRecent }) : 'changes: []');
-    } else {
-      sections.push('changes: []');
-    }
-  } catch {
-    sections.push('changes: []');
-  }
-  sections.push('</changes>');
-
-  try {
-    let queue = reviewQueue ? JSON.parse(reviewQueue) || [] : [];
-    if (!Array.isArray(queue)) queue = [];
-    const now = Date.now();
-
-    // TTL: filter expired items (fallback to timestamp + 72h for legacy items)
-    queue = queue.filter((item) => {
-      const expiry = item.expires_at
-        ? new Date(item.expires_at).getTime()
-        : item.timestamp
-          ? new Date(item.timestamp).getTime() + 72 * 3600000
-          : Infinity;
-      return expiry > now;
-    });
-
-    if (queue.length > 0) {
-      sections.push('');
-      sections.push('<review>');
-      sections.push(
-        '# Unresolved contradictions. Investigate and resolve via context_log.',
-      );
-      sections.push(toYaml({ review_queue: convertTimestamps(queue, timezone) }));
-      sections.push('</review>');
-    }
-  } catch {
-    // corrupted review_queue — skip section
-  }
 
   return sections.join('\n');
 }

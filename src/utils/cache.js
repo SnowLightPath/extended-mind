@@ -10,7 +10,7 @@ export function setMemCache(text) {
   memCache = { text, ts: Date.now() };
 }
 
-export function clearMemCache() {
+function clearMemCache() {
   memCache = null;
 }
 

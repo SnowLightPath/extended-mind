@@ -1,33 +1,19 @@
 {
-  "team": {
-    "team_a": { "count": 6, "note": "6 members from April" },
-    "team_b": { "members": ["Alice", "Bob", "Carol"], "count": 3 },
-    "team_c": { "members": ["Dave"], "count": 1 },
-    "total": 10
-  },
-  "colleagues": {
-    "alice": { "role": "Global Head of AI", "base": "US", "style": "short emails, wants outcomes" },
-    "eve": { "role": "outgoing dept head", "transition": "advisory April 2026" },
-    "carol": { "role": "incoming dept head", "format": "lookup-table" },
-    "frank": { "strength": "face-to-face, reads unspoken states" },
-    "grace": { "role": "AI Governance Charter author" },
-    "bob": { "role": "execution lead", "note": "carrying 3-region load with Carol" },
-    "henry": { "role": "CDXO", "pref": "2-line max" }
-  },
-  "projects": {
-    "agentic_training": { "status": "FY26 flagship", "scope": "agents operational at team_b" },
-    "agent_framework": { "version": "0.3.2", "license": "MIT", "note": "first OSS AI framework" },
-    "conference_2026": { "status": "submitted", "topic": "Agent Framework" },
-    "governance_charter": { "version": "V0.4", "gap": "execution resources" },
-    "ai_transformation": { "phases": ["Select", "Build", "Distribute", "Upskill", "Govern"] }
-  },
-  "org_changes": {
-    "april_2026": "dept split, AI governance elevated to dept level"
-  },
-  "top_of_mind": [
-    "maintain appropriate distance with planning dept",
-    "handover preparation — lookup-table format for AI Transformation",
-    "team_b workload: Bob+Carol handling 3 regions"
+  "entries": [
+    {
+      "id": "example-001",
+      "date": "2026-01-01T00:00:00Z",
+      "data": "alice: role: Global Head of AI. base: US. style: short emails, wants outcomes",
+      "tag": "active",
+      "expires_at": "2026-01-31T00:00:00Z"
+    },
+    {
+      "id": "example-002",
+      "date": "2026-01-01T00:00:00Z",
+      "data": "agent_framework: version 0.3.2, MIT license, first OSS AI framework",
+      "tag": "active",
+      "expires_at": "2026-01-31T00:00:00Z"
+    }
   ],
-  "sessions": []
+  "conflicts": []
 }

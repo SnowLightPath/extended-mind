@@ -30,17 +30,6 @@ for (const [key, file] of Object.entries(files)) {
   console.log(`  seeded: ${key}`);
 }
 
-// Seed empty changelog and review_queue
-const emptyPath = path.join(os.tmpdir(), 'pcp-empty.json');
-fs.writeFileSync(emptyPath, '[]');
-
-kvPut('changelog', emptyPath);
-console.log('  seeded: changelog');
-
-kvPut('review_queue', emptyPath);
-console.log('  seeded: review_queue');
-
-fs.unlinkSync(emptyPath);
 
 console.log('\nSeeded 4 keys with template data.');
 console.log('To seed with real data, use the seed-kv.js in your private data repo.');

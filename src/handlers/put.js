@@ -1,9 +1,14 @@
 import { invalidateCache } from '../utils/cache.js';
 
+async function hashKey(message, timestamp) {
+  const data = new TextEncoder().encode(message + '|' + timestamp);
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hash)).slice(0, 8).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 const MAX_SESSIONS = 20;
-const MAX_CHANGELOG = 50;
 const MAX_MESSAGE_BYTES = 50 * 1024;
-const TTL_HOURS = 72;
+const MIN_CLASSIFY_LENGTH = 50;
 const DEADLINE_MS = 25_000;
 const POST_PROCESS_MS = 3_000;
 const TIMED_OUT = Symbol('timeout');
@@ -22,32 +27,18 @@ export async function handlePut(args, env, platform, ctx) {
   }
 
   const timestamp = new Date().toISOString();
-  const preview = message.length > 80 ? message.slice(0, 80) + '...' : message;
 
-  ctx.waitUntil(asyncWriteAndProcess(env, message, timestamp, platform, preview));
+  ctx.waitUntil(asyncWriteAndProcess(env, message, timestamp, platform));
 
   return {
     content: [{ type: 'text', text: `Stored. (${timestamp})` }],
   };
 }
 
-async function asyncWriteAndProcess(env, message, timestamp, platform, preview) {
+async function asyncWriteAndProcess(env, message, timestamp, platform) {
   // Sessions write (separated from active)
-  let sessionsRaw = await env.PCP.get('sessions');
-  let sessions;
-
-  if (sessionsRaw === null) {
-    // Lazy migration: extract sessions from active
-    const activeRaw = await env.PCP.get('active');
-    const active = activeRaw ? JSON.parse(activeRaw) : {};
-    sessions = active.sessions || [];
-    if (active.sessions) {
-      delete active.sessions;
-      await env.PCP.put('active', JSON.stringify(active));
-    }
-  } else {
-    sessions = JSON.parse(sessionsRaw);
-  }
+  const sessionsRaw = await env.PCP.get('sessions');
+  let sessions = sessionsRaw ? JSON.parse(sessionsRaw) : [];
 
   sessions.push({ timestamp, platform, message });
   if (sessions.length > MAX_SESSIONS) {
@@ -57,22 +48,11 @@ async function asyncWriteAndProcess(env, message, timestamp, platform, preview) 
   await invalidateCache(env);
 
   await Promise.allSettled([
-    updateChangelog(env, timestamp, preview),
     commitToGitHub(env, message, timestamp, platform),
-    message.length >= 50 ? classifyAndUpdate(env, message, timestamp, platform) : Promise.resolve(),
+    message.length >= MIN_CLASSIFY_LENGTH ? classifyAndUpdate(env, message, timestamp, platform) : Promise.resolve(),
   ]);
 }
 
-async function updateChangelog(env, timestamp, preview) {
-  const changelogRaw = await env.PCP.get('changelog');
-  const changelog = changelogRaw ? JSON.parse(changelogRaw) : [];
-  changelog.unshift({ timestamp, preview });
-  if (changelog.length > MAX_CHANGELOG) {
-    changelog.length = MAX_CHANGELOG;
-  }
-  await env.PCP.put('changelog', JSON.stringify(changelog));
-  await invalidateCache(env);
-}
 
 async function commitToGitHub(env, message, timestamp, platform) {
   try {
@@ -114,7 +94,7 @@ async function classifyAndUpdate(env, message, timestamp, platform) {
     const active = JSON.parse(activeRaw || '{}');
 
     const result = await Promise.race([
-      classifyMessage(env, message, active),
+      classifyMessage(env, message, active, timestamp),
       new Promise((resolve) => {
         const remaining = deadline - Date.now() - POST_PROCESS_MS;
         if (remaining <= 0) resolve(TIMED_OUT);
@@ -128,8 +108,8 @@ async function classifyAndUpdate(env, message, timestamp, platform) {
       return;
     }
 
-    await applyClassification(env, result, message, timestamp, platform);
-    if (result.contradictions?.length > 0 || result.active_updates?.length > 0) {
+    await applyClassification(env, result, timestamp, message);
+    if (result.new_conflicts?.length > 0 || result.tag_changes?.length > 0) {
       await env.PCP.put('_sweep_dirty', 'true');
     }
   } catch (err) {
@@ -140,116 +120,112 @@ async function classifyAndUpdate(env, message, timestamp, platform) {
   }
 }
 
-export async function applyClassification(env, result, message, timestamp, platform) {
+export async function applyClassification(env, result, timestamp, message) {
   const freshRaw = await env.PCP.get('active');
-  const fresh = JSON.parse(freshRaw || '{}');
+  const active = JSON.parse(freshRaw || '{"entries":[],"conflicts":[]}');
+  if (!Array.isArray(active.entries)) active.entries = [];
+  if (!Array.isArray(active.conflicts)) active.conflicts = [];
 
-  let activeChanged = false;
-
-  if (result.top_of_mind?.length > 0) {
-    fresh.top_of_mind = result.top_of_mind;
-    activeChanged = true;
+  // Idempotent: skip if already processed
+  active._processed = active._processed || [];
+  const processId = await hashKey(message || '', timestamp);
+  if (active._processed.includes(processId)) {
+    console.log('Classification V2: skipped (duplicate)', processId);
+    return;
   }
 
-  if (result.active_updates?.length > 0) {
-    for (const update of result.active_updates) {
-      if (update.path) applyUpdate(fresh, update.path, update.value);
-    }
-    activeChanged = true;
-  }
+  let changed = false;
+  const ENTRY_TTL_MS = 30 * 24 * 3600 * 1000;
+  const eventTime = new Date(timestamp).getTime();
+  const expiresAt = new Date(eventTime + ENTRY_TTL_MS).toISOString();
 
-  // Auto-heal: structured contradictions → apply expected as update
-  let healedCount = 0;
-  if (result.contradictions?.length > 0) {
-    for (const contradiction of result.contradictions) {
-      if (typeof contradiction !== 'string' && contradiction.path && contradiction.expected !== undefined) {
-        applyUpdate(fresh, contradiction.path, contradiction.expected);
-        healedCount++;
-      }
-    }
-    if (healedCount > 0) activeChanged = true;
-  }
-
-  // Contradiction processing: TTL cleanup → add new (with dedup) → reactive resolve
-  const freshQueueRaw = await env.PCP.get('review_queue');
-  let freshQueue = JSON.parse(freshQueueRaw || '[]');
-
-  const now = Date.now();
-  const preFilterLen = freshQueue.length;
-  freshQueue = freshQueue.filter((item) => {
-    const expiry = item.expires_at
-      ? new Date(item.expires_at).getTime()
-      : item.timestamp
-        ? new Date(item.timestamp).getTime() + TTL_HOURS * 3600000
-        : Infinity;
-    return expiry > now;
-  });
-  const ttlRemoved = preFilterLen - freshQueue.length;
-
-  const beforeLen = freshQueue.length;
-
-  if (result.contradictions?.length > 0) {
-    for (const contradiction of result.contradictions) {
-      const item = typeof contradiction === 'string' ? { issue: contradiction } : contradiction;
-
-      // Deduplicate: if a structured contradiction with the same path exists, refresh TTL
-      if (item.path) {
-        const existingIdx = freshQueue.findIndex(
-          (q) => q.type === 'contradiction' && q.path === item.path
-        );
-        if (existingIdx !== -1) {
-          freshQueue[existingIdx].expires_at = new Date(now + TTL_HOURS * 3600000).toISOString();
-          freshQueue[existingIdx].expected = item.expected;
-          freshQueue[existingIdx].issue = item.issue;
-          continue;
+  // 1. tag_changes — includes active restoration (conflict → active with TTL reset)
+  if (result.tag_changes?.length > 0) {
+    for (const change of result.tag_changes) {
+      const entry = active.entries.find(e => e.id === change.id);
+      if (entry) {
+        entry.tag = change.new_tag;
+        if (change.new_tag === 'active') {
+          entry.expires_at = new Date(Date.now() + ENTRY_TTL_MS).toISOString();
         }
+        changed = true;
       }
+    }
+  }
 
-      freshQueue.push({
-        timestamp,
-        platform,
-        type: 'contradiction',
-        ...item,
-        source_preview: message.slice(0, 200),
-        expires_at: new Date(now + TTL_HOURS * 3600000).toISOString(),
+  // 2. new_entries — generate UUIDs, build id map for $N replacement
+  const idMap = {};
+  if (result.new_entries?.length > 0) {
+    for (let i = 0; i < result.new_entries.length; i++) {
+      const ne = result.new_entries[i];
+      const id = crypto.randomUUID();
+      idMap[`$${i}`] = id;
+      active.entries.push({
+        id,
+        date: timestamp,
+        data: ne.data,
+        tag: ne.tag || 'active',
+        expires_at: expiresAt,
       });
     }
+    changed = true;
   }
 
-  // Reactive: auto-resolve structured contradictions whose expected value now matches active
-  let resolvedCount = 0;
-  freshQueue = freshQueue.filter((item) => {
-    if (!item.path || item.expected === undefined) return true;
-    const current = getNestedValue(fresh, item.path);
-    const currentNorm = current === undefined ? null : current;
-    if (JSON.stringify(currentNorm) === JSON.stringify(item.expected)) {
-      resolvedCount++;
-      return false;
+  // 3. new_conflicts — replace $N placeholders with actual UUIDs, reset TTL on conflict entries
+  if (result.new_conflicts?.length > 0) {
+    for (const nc of result.new_conflicts) {
+      const resolvedIds = nc.ids.map(id => idMap[id] || id);
+      active.conflicts.push({
+        ids: resolvedIds,
+        issue: nc.issue,
+        created_at: new Date().toISOString(),
+      });
+      // Reset TTL on entries entering conflict so they don't expire before conflict resolves
+      for (const eid of resolvedIds) {
+        const entry = active.entries.find(e => e.id === eid);
+        if (entry) {
+          entry.expires_at = new Date(Date.now() + ENTRY_TTL_MS).toISOString();
+        }
+      }
     }
-    return true;
-  });
-
-  const queueChanged = ttlRemoved > 0 || beforeLen !== freshQueue.length || (result.contradictions?.length > 0);
-
-  // Consolidated writes: each key written at most once
-  if (activeChanged) {
-    await env.PCP.put('active', JSON.stringify(fresh));
+    changed = true;
   }
-  if (queueChanged) {
-    while (freshQueue.length > 20) freshQueue.shift();
-    await env.PCP.put('review_queue', JSON.stringify(freshQueue));
+
+  // 4. resolved_conflicts — remove record, restore winners
+  if (result.resolved_conflicts?.length > 0) {
+    const staledIds = new Set((result.tag_changes || []).filter(c => c.new_tag === 'stale').map(c => c.id));
+    for (const rc of result.resolved_conflicts) {
+      const sortedIds = [...rc.ids].sort();
+      active.conflicts = active.conflicts.filter(c => {
+        const cSorted = [...c.ids].sort();
+        return JSON.stringify(cSorted) !== JSON.stringify(sortedIds);
+      });
+      // Restore winners: entries in this conflict that weren't staled
+      for (const eid of rc.ids) {
+        if (staledIds.has(eid)) continue;
+        const entry = active.entries.find(e => e.id === eid);
+        if (entry && entry.tag === 'conflict') {
+          entry.tag = 'active';
+          entry.expires_at = new Date(Date.now() + ENTRY_TTL_MS).toISOString();
+        }
+      }
+    }
+    changed = true;
   }
-  if (activeChanged || queueChanged) {
+
+  active._processed.push(processId);
+  if (active._processed.length > 50) active._processed.shift();
+
+  await env.PCP.put('active', JSON.stringify(active));
+  if (changed) {
     await invalidateCache(env);
   }
 
-  console.log('Classification:', {
-    top_of_mind: result.top_of_mind?.length || 0,
-    updates: result.active_updates?.length || 0,
-    contradictions: result.contradictions?.length || 0,
-    healed: healedCount,
-    resolved: resolvedCount,
-    ttl_removed: ttlRemoved,
+  console.log('Classification V2:', {
+    new_entries: result.new_entries?.length || 0,
+    tag_changes: result.tag_changes?.length || 0,
+    new_conflicts: result.new_conflicts?.length || 0,
+    resolved_conflicts: result.resolved_conflicts?.length || 0,
   });
 }
 
@@ -261,26 +237,3 @@ async function enqueuePending(env, message, timestamp, platform) {
   await env.PCP.put('pending_classify', JSON.stringify(queue));
 }
 
-function getNestedValue(obj, path) {
-  return path.split('.').reduce((o, k) => o?.[k], obj);
-}
-
-const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
-
-function applyUpdate(obj, path, value) {
-  const keys = path.split('.');
-  if (keys.some((k) => UNSAFE_KEYS.has(k))) return;
-  let current = obj;
-  for (let i = 0; i < keys.length - 1; i++) {
-    if (!(keys[i] in current) || typeof current[keys[i]] !== 'object') {
-      if (value === null) return;
-      current[keys[i]] = {};
-    }
-    current = current[keys[i]];
-  }
-  if (value === null) {
-    delete current[keys[keys.length - 1]];
-  } else {
-    current[keys[keys.length - 1]] = value;
-  }
-}
