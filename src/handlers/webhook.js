@@ -69,8 +69,24 @@ async function processWebhook(payload, env) {
   return results;
 }
 
+const MAX_WEBHOOK_BODY = 5 * 1024 * 1024; // 5MB
+
 export async function handleWebhook(request, env, ctx) {
+  const contentLength = parseInt(request.headers.get('content-length') || '0');
+  if (contentLength > MAX_WEBHOOK_BODY) {
+    return new Response(JSON.stringify({ error: 'Payload too large' }), {
+      status: 413,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
   const body = await request.text();
+  if (body.length > MAX_WEBHOOK_BODY) {
+    return new Response(JSON.stringify({ error: 'Payload too large' }), {
+      status: 413,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
 
   if (!env.WEBHOOK_SECRET) {
     return new Response(JSON.stringify({ error: 'Webhook not configured' }), {

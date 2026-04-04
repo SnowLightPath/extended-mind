@@ -224,8 +224,22 @@ export default {
         response_types_supported: ['code'],
         grant_types_supported: ['authorization_code'],
         token_endpoint_auth_methods_supported: ['client_secret_post'],
+        code_challenge_methods_supported: ['S256'],
         logo_uri: `${issuer}/icon.svg`,
       });
+    }
+
+    // Rate limit auth-related POST routes (OAuth, passkey, WebAuthn)
+    if (request.method === 'POST' && (
+      url.pathname === '/oauth/authorize' ||
+      url.pathname === '/oauth/revoke' ||
+      url.pathname === '/passkey' ||
+      url.pathname.startsWith('/oauth/authorize/webauthn/')
+    )) {
+      const authIp = request.headers.get('cf-connecting-ip') || 'unknown';
+      if (!await checkRateLimit(env, authIp)) {
+        return json({ error: 'Too many requests' }, 429, { 'Retry-After': '60' });
+      }
     }
 
     // OAuth routes (no bearer auth required)

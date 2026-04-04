@@ -39,12 +39,16 @@ function escapeHtml(str) {
 }
 
 
-async function createAuthSession(env, { client_id, redirect_uri, state }) {
+async function createAuthSession(env, { client_id, redirect_uri, state, code_challenge, code_challenge_method }) {
   const authSessionId = randomHex(16);
   const csrfToken = randomHex(16);
   await env.PCP.put(
     `auth:session:${authSessionId}`,
-    JSON.stringify({ client_id, redirect_uri, state, csrf_token: csrfToken }),
+    JSON.stringify({
+      client_id, redirect_uri, state, csrf_token: csrfToken,
+      code_challenge: code_challenge || null,
+      code_challenge_method: code_challenge ? (code_challenge_method || 'S256') : null,
+    }),
     { expirationTtl: CSRF_TTL },
   );
   return { authSessionId, csrfToken };
@@ -155,9 +159,15 @@ export async function handleAuthorizeGet(url, env) {
   const redirectUri = url.searchParams.get('redirect_uri');
   const responseType = url.searchParams.get('response_type');
   const state = url.searchParams.get('state');
+  const codeChallenge = url.searchParams.get('code_challenge');
+  const codeChallengeMethod = url.searchParams.get('code_challenge_method') || 'S256';
 
   if (responseType !== 'code') {
     return html('<p>Error: response_type must be "code"</p>', 400);
+  }
+
+  if (codeChallenge && codeChallengeMethod !== 'S256') {
+    return html('<p>Error: Only S256 code_challenge_method is supported</p>', 400);
   }
 
   let client;
@@ -179,6 +189,8 @@ export async function handleAuthorizeGet(url, env) {
     client_id: clientId,
     redirect_uri: redirectUri,
     state,
+    code_challenge: codeChallenge,
+    code_challenge_method: codeChallenge ? codeChallengeMethod : null,
   });
 
   return authorizePage(client.name, authSessionId, csrfToken);
@@ -238,6 +250,8 @@ export async function handleAuthorizePost(request, env) {
       client_id: authSession.client_id,
       redirect_uri: authSession.redirect_uri,
       created_at: Date.now(),
+      code_challenge: authSession.code_challenge || null,
+      code_challenge_method: authSession.code_challenge_method || null,
     }),
     { expirationTtl: CODE_TTL },
   );
@@ -266,7 +280,7 @@ export async function handleToken(request, env) {
     return oauthError('invalid_request', 'Malformed request body');
   }
 
-  const { grant_type, code, client_id, client_secret, redirect_uri } = params;
+  const { grant_type, code, client_id, client_secret, redirect_uri, code_verifier } = params;
 
   if (grant_type !== 'authorization_code') {
     return oauthError('unsupported_grant_type', 'Only authorization_code is supported');
@@ -302,6 +316,19 @@ export async function handleToken(request, env) {
 
   if (codeData.client_id !== client_id || codeData.redirect_uri !== redirect_uri) {
     return oauthError('invalid_grant', 'Code does not match client or redirect_uri');
+  }
+
+  // PKCE verification (RFC 7636)
+  if (codeData.code_challenge) {
+    if (!code_verifier) {
+      return oauthError('invalid_grant', 'code_verifier required');
+    }
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(code_verifier));
+    const computed = btoa(String.fromCharCode(...new Uint8Array(digest)))
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    if (computed !== codeData.code_challenge) {
+      return oauthError('invalid_grant', 'code_verifier mismatch');
+    }
   }
 
   // Atomic single-use claim via Durable Object
