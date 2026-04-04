@@ -12,7 +12,12 @@ const PLATFORM_MAP = {
 function html(body, status = 200) {
   return new Response(body, {
     status,
-    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'X-Frame-Options': 'DENY',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; form-action 'self'",
+    },
   });
 }
 
@@ -195,7 +200,7 @@ export async function handleAuthorizePost(request, env) {
   }
 
   const authSession = await getAuthSession(env, authSessionId);
-  if (!authSession || authSession.csrf_token !== csrfToken) {
+  if (!authSession || !constantTimeEqual(authSession.csrf_token || '', csrfToken || '')) {
     return html('<p>Error: Invalid request — please try again from the authorization link</p>', 400);
   }
 
@@ -278,7 +283,7 @@ export async function handleToken(request, env) {
     return oauthError('invalid_client', 'Authentication failed', 401);
   }
 
-  if (!constantTimeEqual(client.client_secret || '', client_secret || '')) {
+  if (!client.client_secret || !client_secret || !constantTimeEqual(client.client_secret, client_secret)) {
     return oauthError('invalid_client', 'Authentication failed', 401);
   }
 
@@ -370,7 +375,7 @@ export async function handleRevoke(request, env) {
       const clientRaw = await env.PCP.get(`oauth:client:${params.client_id}`);
       if (clientRaw) {
         const client = JSON.parse(clientRaw);
-        if (constantTimeEqual(client.client_secret || '', params.client_secret || '')) {
+        if (client.client_secret && params.client_secret && constantTimeEqual(client.client_secret, params.client_secret)) {
           authenticated = true;
           authenticatedClientId = params.client_id;
         }

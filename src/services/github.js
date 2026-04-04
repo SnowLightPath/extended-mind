@@ -27,7 +27,10 @@ export async function getFileFromRepo(env, repo, path) {
     },
   });
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`GitHub GET ${repo}/${path}: ${res.status}`);
+  if (!res.ok) {
+    console.error(`GitHub GET ${repo}/${path}: ${res.status}`);
+    throw new Error('GitHub operation failed');
+  }
   const data = await res.json();
   return { content: fromBase64(data.content), sha: data.sha };
 }
@@ -51,8 +54,9 @@ export async function putFile(env, path, content, message, sha) {
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`GitHub PUT ${path}: ${res.status} ${err}`);
+    const errBody = await res.text();
+    console.error(`GitHub PUT ${path}: ${res.status}`, errBody);
+    throw new Error('GitHub operation failed');
   }
   return await res.json();
 }

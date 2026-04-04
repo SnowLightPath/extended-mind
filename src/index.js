@@ -1,4 +1,5 @@
 import { authenticateWithOAuth } from './utils/auth.js';
+import { checkRateLimit, FAILURE_WEIGHT } from './utils/rate-limit.js';
 import { tools } from './tools.js';
 import { handleGet } from './handlers/get.js';
 import { handlePut } from './handlers/put.js';
@@ -20,15 +21,49 @@ function rpcErr(id, code, message) {
   return json({ jsonrpc: '2.0', id, error: { code, message } });
 }
 
-function getPlatform(request, oauthPlatform) {
-  if (oauthPlatform) return oauthPlatform;
+const PLATFORM_RE = /^[a-z0-9][a-z0-9_-]{0,29}$/;
+
+async function signSessionId(env, payload) {
+  const data = JSON.stringify(payload);
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(env.PCP_TOKEN),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(data));
+  const sigHex = Array.from(new Uint8Array(sig)).slice(0, 16)
+    .map(b => b.toString(16).padStart(2, '0')).join('');
+  return btoa(data + '.' + sigHex);
+}
+
+async function verifySessionId(env, sid) {
+  try {
+    const decoded = atob(sid);
+    const dotIdx = decoded.lastIndexOf('.');
+    if (dotIdx === -1) return null;
+    const data = decoded.slice(0, dotIdx);
+    const sig = decoded.slice(dotIdx + 1);
+    const key = await crypto.subtle.importKey(
+      'raw', new TextEncoder().encode(env.PCP_TOKEN),
+      { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+    );
+    const expected = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(data));
+    const expectedHex = Array.from(new Uint8Array(expected)).slice(0, 16)
+      .map(b => b.toString(16).padStart(2, '0')).join('');
+    if (sig !== expectedHex) return null;
+    return JSON.parse(data);
+  } catch {
+    return null;
+  }
+}
+
+async function getPlatform(request, env, oauthPlatform) {
+  if (oauthPlatform && PLATFORM_RE.test(oauthPlatform)) return oauthPlatform;
+  if (oauthPlatform) return 'unknown';
   const sid = request.headers.get('mcp-session-id');
   if (!sid) return 'unknown';
-  try {
-    return JSON.parse(atob(sid)).p || 'unknown';
-  } catch {
-    return 'unknown';
-  }
+  const payload = await verifySessionId(env, sid);
+  if (payload && payload.p && PLATFORM_RE.test(payload.p)) return payload.p;
+  return 'unknown';
 }
 
 async function syncCore(env) {
@@ -200,6 +235,10 @@ export default {
       return json({ error: 'Method not allowed' }, 405);
     }
     if (url.pathname === '/oauth/token' && request.method === 'POST') {
+      const tokenIp = request.headers.get('cf-connecting-ip') || 'unknown';
+      if (!await checkRateLimit(env, tokenIp)) {
+        return json({ error: 'Too many requests' }, 429, { 'Retry-After': '60' });
+      }
       return handleToken(request, env);
     }
     if (url.pathname === '/oauth/revoke' && request.method === 'POST') {
@@ -243,8 +282,14 @@ export default {
       return json({ error: 'Method not allowed' }, 405);
     }
 
+    const clientIp = request.headers.get('cf-connecting-ip') || 'unknown';
+    if (!await checkRateLimit(env, clientIp)) {
+      return json({ error: 'Too many requests' }, 429, { 'Retry-After': '60' });
+    }
+
     const auth = await authenticateWithOAuth(request, env);
     if (!auth.ok) {
+      await checkRateLimit(env, clientIp, FAILURE_WEIGHT);
       return json({ error: 'Unauthorized' }, 401);
     }
 
@@ -262,7 +307,7 @@ export default {
     switch (body.method) {
       case 'initialize': {
         const platform = body.params?.clientInfo?.name || 'unknown';
-        const sessionId = btoa(JSON.stringify({ p: auth.platform || platform }));
+        const sessionId = await signSessionId(env, { p: auth.platform || platform });
         const baseUrl = `${url.protocol}//${url.host}`;
         return rpcOk(
           body.id,
@@ -296,13 +341,16 @@ export default {
             case 'context_get':
               return rpcOk(body.id, await handleGet(env, ctx));
             case 'context_log':
-              return rpcOk(body.id, await handlePut(args || {}, env, getPlatform(request, auth.platform), ctx));
+              return rpcOk(body.id, await handlePut(args || {}, env, await getPlatform(request, env, auth.platform), ctx));
             default:
               return rpcErr(body.id, -32602, `Unknown tool: ${name}`);
           }
         } catch (err) {
+          console.error('RPC error:', err);
+          const safeMessages = ['message must not be empty', 'message exceeds 50KB limit'];
+          const text = safeMessages.includes(err.message) ? `Error: ${err.message}` : 'Error: Internal error';
           return rpcOk(body.id, {
-            content: [{ type: 'text', text: `Error: ${err.message}` }],
+            content: [{ type: 'text', text }],
             isError: true,
           });
         }

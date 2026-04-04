@@ -29,9 +29,12 @@ export async function handlePut(args, env, platform, ctx) {
     }
   }
 
+  // Strip non-printable control characters (preserve newlines, tabs, carriage returns)
+  const sanitized = message.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+
   const timestamp = new Date().toISOString();
 
-  ctx.waitUntil(asyncWriteAndProcess(env, message, timestamp, platform));
+  ctx.waitUntil(asyncWriteAndProcess(env, sanitized, timestamp, platform));
 
   return {
     content: [{ type: 'text', text: `Stored. (${timestamp})` }],

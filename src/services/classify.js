@@ -67,7 +67,8 @@ async function callProvider(env, system, message, schema) {
 
   if (!response.ok) {
     const err = await response.text();
-    throw new Error(`${providerName} API ${response.status}: ${err}`);
+    console.error(`Classify API error: ${providerName} ${response.status}:`, err);
+    throw new Error('Classification service unavailable');
   }
 
   const data = await response.json();
@@ -84,14 +85,58 @@ async function callProvider(env, system, message, schema) {
   }
 }
 
+function validateClassifyResult(result) {
+  if (!result || typeof result !== 'object') throw new Error('Invalid classify result');
+
+  for (const key of ['new_entries', 'tag_changes', 'new_conflicts', 'resolved_conflicts']) {
+    if (result[key] !== undefined && !Array.isArray(result[key])) {
+      throw new Error(`${key} must be array`);
+    }
+  }
+
+  if (result.new_entries) {
+    if (result.new_entries.length > 20) throw new Error('Too many new_entries');
+    for (const e of result.new_entries) {
+      if (typeof e.data !== 'string' || !e.data) throw new Error('Entry missing data');
+      if (e.data.length > 5000) throw new Error('Entry data too long');
+      if (e.tag && !['active', 'conflict'].includes(e.tag)) throw new Error('Invalid entry tag');
+    }
+  }
+
+  if (result.tag_changes) {
+    if (result.tag_changes.length > 50) throw new Error('Too many tag_changes');
+    for (const tc of result.tag_changes) {
+      if (!tc.id || typeof tc.id !== 'string') throw new Error('tag_change missing id');
+      if (!['active', 'stale', 'conflict'].includes(tc.new_tag)) throw new Error('Invalid new_tag');
+    }
+  }
+
+  if (result.new_conflicts) {
+    if (result.new_conflicts.length > 20) throw new Error('Too many new_conflicts');
+    for (const nc of result.new_conflicts) {
+      if (!Array.isArray(nc.ids) || nc.ids.length === 0) throw new Error('Conflict missing ids');
+      if (typeof nc.issue !== 'string') throw new Error('Conflict missing issue');
+    }
+  }
+
+  if (result.resolved_conflicts) {
+    if (result.resolved_conflicts.length > 20) throw new Error('Too many resolved_conflicts');
+    for (const rc of result.resolved_conflicts) {
+      if (!Array.isArray(rc.ids) || rc.ids.length === 0) throw new Error('Resolved conflict missing ids');
+    }
+  }
+
+  return result;
+}
+
 export async function classifyMessage(env, message, currentActive, timestamp) {
   const system = buildClassifyPrompt(currentActive);
   const userMessage = timestamp ? `${message}\n\nTimestamp: ${timestamp}` : message;
-  return callProvider(env, system, userMessage, CLASSIFY_SCHEMA);
+  return validateClassifyResult(await callProvider(env, system, userMessage, CLASSIFY_SCHEMA));
 }
 
 export async function classifySweep(env, currentActive) {
-  return callProvider(env, buildSweepPrompt(currentActive), 'Review active entries for internal consistency.', SWEEP_SCHEMA);
+  return validateClassifyResult(await callProvider(env, buildSweepPrompt(currentActive), 'Review active entries for internal consistency.', SWEEP_SCHEMA));
 }
 
 const CLASSIFY_SCHEMA = {

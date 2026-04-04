@@ -296,7 +296,9 @@ function convertTimestamps(obj, timezone) {
 }
 
 function sanitizeSectionContent(text) {
-  return text.replace(/<\/?(?:instructions|core|active)>/gi, '');
+  return text
+    .replace(/<\/?(?:instructions|core|active)>/gi, '')
+    .replace(/<(?!\/?(?:instructions|core|active)>)/gi, '\\u003c');
 }
 
 export function assembleContext(core, active, sessions, timezone) {

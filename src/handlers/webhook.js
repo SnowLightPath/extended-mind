@@ -88,6 +88,20 @@ export async function handleWebhook(request, env, ctx) {
     });
   }
 
+  // Webhook idempotency via X-GitHub-Delivery header
+  const deliveryId = request.headers.get('x-github-delivery');
+  if (deliveryId) {
+    const idempKey = `webhook:delivery:${deliveryId}`;
+    const seen = await env.PCP.get(idempKey);
+    if (seen) {
+      return new Response(JSON.stringify({ ok: true, deduplicated: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    await env.PCP.put(idempKey, '1', { expirationTtl: 86400 });
+  }
+
   let payload;
   try {
     payload = JSON.parse(body);

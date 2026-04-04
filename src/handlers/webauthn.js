@@ -354,7 +354,15 @@ document.getElementById('registerBtn').addEventListener('click', async () => {
 </script>
 </body>
 </html>`,
-    { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
+    {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        'X-Frame-Options': 'DENY',
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'self'",
+      },
+    },
   );
 }
 
