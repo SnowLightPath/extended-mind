@@ -1,4 +1,4 @@
-import { getAuthSession, constantTimeEqual, randomHex } from '../utils/auth.js';
+import { getAuthSession, constantTimeEqual, randomHex, hashToken } from '../utils/auth.js';
 
 const CODE_TTL = 600;
 const CSRF_TTL = 600;
@@ -343,8 +343,9 @@ export async function handleToken(request, env) {
   await env.PCP.delete(codeKey);
 
   const accessToken = `pcp_oauth_${randomHex(32)}`;
+  const tokenHash = await hashToken(accessToken);
   await env.PCP.put(
-    `oauth:token:${accessToken}`,
+    `oauth:token:${tokenHash}`,
     JSON.stringify({ client_id, platform: PLATFORM_MAP[client_id] || client.name, created_at: Date.now() }),
     { expirationTtl: TOKEN_TTL },
   );
@@ -417,8 +418,9 @@ export async function handleRevoke(request, env) {
   }
 
   // Enforce client boundary: non-admin can only revoke own tokens
+  const revokeHash = await hashToken(tokenToRevoke);
   if (authenticatedClientId !== null) {
-    const tokenRaw = await env.PCP.get(`oauth:token:${tokenToRevoke}`);
+    const tokenRaw = await env.PCP.get(`oauth:token:${revokeHash}`);
     if (tokenRaw) {
       try {
         const tokenData = JSON.parse(tokenRaw);
@@ -436,7 +438,7 @@ export async function handleRevoke(request, env) {
   }
 
   // RFC 7009: always return 200, even if token doesn't exist
-  await env.PCP.delete(`oauth:token:${tokenToRevoke}`);
+  await env.PCP.delete(`oauth:token:${revokeHash}`);
 
   return new Response(JSON.stringify({}), {
     status: 200,

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { env } from 'cloudflare:test';
 import { handleRevoke } from '../src/handlers/oauth.js';
+import { hashToken } from '../src/utils/auth.js';
 
 const CLIENT_A = 'revoke-client-a';
 const CLIENT_B = 'revoke-client-b';
@@ -31,31 +32,34 @@ function revokeRequest(token, auth) {
 describe('/oauth/revoke — client boundary', () => {
   it('client can revoke own token', async () => {
     const tokenValue = 'pcp_oauth_own_token_test';
-    await env.PCP.put(`oauth:token:${tokenValue}`, JSON.stringify({ client_id: CLIENT_A, platform: 'test', created_at: Date.now() }));
+    const hashed = await hashToken(tokenValue);
+    await env.PCP.put(`oauth:token:${hashed}`, JSON.stringify({ client_id: CLIENT_A, platform: 'test', created_at: Date.now() }));
 
     const res = await handleRevoke(revokeRequest(tokenValue, { client_id: CLIENT_A, client_secret: SECRET_A }), env);
     expect(res.status).toBe(200);
-    const remaining = await env.PCP.get(`oauth:token:${tokenValue}`);
+    const remaining = await env.PCP.get(`oauth:token:${hashed}`);
     expect(remaining).toBeNull();
   });
 
   it('client cannot revoke other client token — returns 200 but token persists', async () => {
     const tokenValue = 'pcp_oauth_cross_client_test';
-    await env.PCP.put(`oauth:token:${tokenValue}`, JSON.stringify({ client_id: CLIENT_A, platform: 'test', created_at: Date.now() }));
+    const hashed = await hashToken(tokenValue);
+    await env.PCP.put(`oauth:token:${hashed}`, JSON.stringify({ client_id: CLIENT_A, platform: 'test', created_at: Date.now() }));
 
     const res = await handleRevoke(revokeRequest(tokenValue, { client_id: CLIENT_B, client_secret: SECRET_B }), env);
     expect(res.status).toBe(200); // RFC 7009
-    const remaining = await env.PCP.get(`oauth:token:${tokenValue}`);
+    const remaining = await env.PCP.get(`oauth:token:${hashed}`);
     expect(remaining).not.toBeNull(); // Token still exists
   });
 
   it('PCP_TOKEN (admin) can revoke any token', async () => {
     const tokenValue = 'pcp_oauth_admin_revoke_test';
-    await env.PCP.put(`oauth:token:${tokenValue}`, JSON.stringify({ client_id: CLIENT_A, platform: 'test', created_at: Date.now() }));
+    const hashed = await hashToken(tokenValue);
+    await env.PCP.put(`oauth:token:${hashed}`, JSON.stringify({ client_id: CLIENT_A, platform: 'test', created_at: Date.now() }));
 
     const res = await handleRevoke(revokeRequest(tokenValue, { bearer: PCP_TOKEN }), env);
     expect(res.status).toBe(200);
-    const remaining = await env.PCP.get(`oauth:token:${tokenValue}`);
+    const remaining = await env.PCP.get(`oauth:token:${hashed}`);
     expect(remaining).toBeNull();
   });
 });

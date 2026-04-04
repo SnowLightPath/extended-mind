@@ -4,6 +4,11 @@ export function randomHex(bytes) {
   return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+export async function hashToken(token) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+  return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 export function constantTimeEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
   if (a.length !== b.length) return false;
@@ -26,7 +31,8 @@ export async function authenticateWithOAuth(request, env) {
     return { ok: true, platform: 'claude-code' };
   }
 
-  const tokenRaw = await env.PCP.get(`oauth:token:${token}`);
+  const tokenHash = await hashToken(token);
+  const tokenRaw = await env.PCP.get(`oauth:token:${tokenHash}`);
   if (tokenRaw) {
     try {
       const data = JSON.parse(tokenRaw);
