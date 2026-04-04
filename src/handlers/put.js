@@ -1,5 +1,15 @@
 import { writeAction } from '../utils/write.js';
 
+async function enqueueWithFallback(env, queue, doAction, payload) {
+  try {
+    await queue.send(payload);
+  } catch {
+    // Mirror action expects { platform }, others expect { entry }
+    const fallbackPayload = doAction === 'enqueue_github_mirror' ? payload : { entry: payload };
+    await writeAction(env, doAction, fallbackPayload);
+  }
+}
+
 const MAX_MESSAGE_BYTES = 50 * 1024;
 const MIN_CLASSIFY_LENGTH = 50;
 const DEADLINE_MS = 25_000;
@@ -43,12 +53,16 @@ async function asyncWriteAndProcess(env, message, timestamp, platform) {
     await mirrorActiveJson(env, putFile, platform);
   } catch (err) {
     console.error('active.json mirror failed (deferred):', err.message);
-    try {
-      await writeAction(env, 'enqueue_github_mirror', { platform });
-    } catch {}
+    await enqueueWithFallback(env, env.QUEUE_GITHUB_MIRROR, 'enqueue_github_mirror', { platform });
   }
 }
 
+
+export async function hashIdempotencyKey(message, timestamp, platform) {
+  const data = new TextEncoder().encode(message + '|' + timestamp + '|' + platform);
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hash)).slice(0, 8).map(b => b.toString(16).padStart(2, '0')).join('');
+}
 
 export async function mirrorActiveJson(env, putFile, platform) {
   const [activeRaw, sessionsRaw] = await Promise.all([
@@ -71,7 +85,13 @@ async function commitSessionToGitHub(env, message, timestamp, platform, retries 
     const sessionPath = `sessions/${yearMonth}/${date}_${platform}.md`;
     const existing = await getFile(env, sessionPath);
     const sha = existing?.sha ?? null;
-    const newEntry = `\n---\n_${timestamp}_\n\n${message}`;
+    const idempotencyKey = await hashIdempotencyKey(message, timestamp, platform);
+    const marker = `<!-- ${idempotencyKey} -->`;
+    if (existing?.content.includes(marker)) {
+      console.log('GitHub commit: skipped (duplicate)', sessionPath);
+      return;
+    }
+    const newEntry = `\n---\n${marker}\n_${timestamp}_\n\n${message}`;
     const sessionContent = existing
       ? existing.content + newEntry
       : `# Session: ${date} (${platform})\n${newEntry}`;
@@ -83,9 +103,7 @@ async function commitSessionToGitHub(env, message, timestamp, platform, retries 
       return commitSessionToGitHub(env, message, timestamp, platform, retries - 1);
     }
     console.error('GitHub session commit failed (deferred):', err.message);
-    try {
-      await writeAction(env, 'enqueue_github', { entry: { message, timestamp, platform } });
-    } catch {}
+    await enqueueWithFallback(env, env.QUEUE_GITHUB, 'enqueue_github', { message, timestamp, platform });
   }
 }
 
@@ -107,7 +125,7 @@ async function classifyAndUpdate(env, message, timestamp, platform) {
     ]);
 
     if (result === TIMED_OUT) {
-      await writeAction(env, 'enqueue_pending', { entry: { message, timestamp, platform } });
+      await enqueueWithFallback(env, env.QUEUE_CLASSIFY, 'enqueue_pending', { message, timestamp, platform });
       console.log('Classification deferred (timeout)');
       return;
     }
@@ -117,9 +135,7 @@ async function classifyAndUpdate(env, message, timestamp, platform) {
       await env.PCP.put('_sweep_dirty', 'true');
     }
   } catch (err) {
-    try {
-      await writeAction(env, 'enqueue_pending', { entry: { message, timestamp, platform } });
-    } catch {}
+    await enqueueWithFallback(env, env.QUEUE_CLASSIFY, 'enqueue_pending', { message, timestamp, platform });
     console.error('Classification deferred (error):', err.message);
   }
 }

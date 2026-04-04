@@ -50,83 +50,66 @@ async function syncCore(env) {
   }
 }
 
-async function repairGitHubMirror(env) {
-  try {
-    const { writeAction } = await import('./utils/write.js');
-    const { platform } = await writeAction(env, 'dequeue_github_mirror');
-    if (!platform) return;
-
-    const { putFile } = await import('./services/github.js');
-    const { mirrorActiveJson } = await import('./handlers/put.js');
-    await mirrorActiveJson(env, putFile, platform);
-    console.log('Cron: repaired active.json mirror for', platform);
-  } catch (err) {
-    console.error('Cron mirror repair failed:', err.message);
+// Queue consumer handlers (exported for testability)
+export async function handleClassifyMessage(env, { message, timestamp, platform }) {
+  const { classifyMessage } = await import('./services/classify.js');
+  const { writeAction } = await import('./utils/write.js');
+  const activeRaw = await env.PCP.get('active');
+  const active = JSON.parse(activeRaw || '{"entries":[],"conflicts":[]}');
+  const result = await classifyMessage(env, message, active, timestamp);
+  await writeAction(env, 'apply_classification', { result, timestamp, message });
+  if (result.new_entries?.length > 0 || result.new_conflicts?.length > 0 || result.tag_changes?.length > 0) {
+    await env.PCP.put('_sweep_dirty', 'true');
   }
 }
 
-async function processGitHubPending(env) {
+export async function handleGitHubMessage(env, { message, timestamp, platform }) {
+  const { getFile, putFile } = await import('./services/github.js');
+  const { mirrorActiveJson, hashIdempotencyKey } = await import('./handlers/put.js');
+  const date = timestamp.split('T')[0];
+  const yearMonth = date.slice(0, 7);
+  const sessionPath = `sessions/${yearMonth}/${date}_${platform}.md`;
+  const existing = await getFile(env, sessionPath);
+  const sha = existing?.sha ?? null;
+
+  const idempotencyKey = await hashIdempotencyKey(message, timestamp, platform);
+  const marker = `<!-- ${idempotencyKey} -->`;
+  if (existing?.content.includes(marker)) return;
+
+  const newEntry = `\n---\n${marker}\n_${timestamp}_\n\n${message}`;
+  const content = existing
+    ? existing.content + newEntry
+    : `# Session: ${date} (${platform})\n${newEntry}`;
+  await putFile(env, sessionPath, content, `log from ${platform} at ${timestamp} (deferred)`, sha);
+  await mirrorActiveJson(env, putFile, platform);
+}
+
+export async function handleGitHubMirrorMessage(env, { platform }) {
+  const { putFile } = await import('./services/github.js');
+  const { mirrorActiveJson } = await import('./handlers/put.js');
+  await mirrorActiveJson(env, putFile, platform);
+}
+
+// KV fallback drain — moves stale KV items into Queues
+async function drainKvFallback(env) {
   const { writeAction } = await import('./utils/write.js');
-  let item;
-  try {
-    const res = await writeAction(env, 'dequeue_github');
-    item = res.item;
-    if (!item) return;
-
-    const { getFile, putFile } = await import('./services/github.js');
-    const date = item.timestamp.split('T')[0];
-    const yearMonth = date.slice(0, 7);
-    const sessionPath = `sessions/${yearMonth}/${date}_${item.platform}.md`;
-    const existing = await getFile(env, sessionPath);
-    const sha = existing?.sha ?? null;
-    const newEntry = `\n---\n_${item.timestamp}_\n\n${item.message}`;
-    const content = existing
-      ? existing.content + newEntry
-      : `# Session: ${date} (${item.platform})\n${newEntry}`;
-    await putFile(env, sessionPath, content, `log from ${item.platform} at ${item.timestamp} (deferred)`, sha);
-
-    // Mirror active.json to GitHub
+  // peek → send → dequeue: item stays in KV until Queue accepts it
+  for (const [peekAction, dequeueAction, queue, isMirror] of [
+    ['peek_pending', 'dequeue_pending', env.QUEUE_CLASSIFY, false],
+    ['peek_github', 'dequeue_github', env.QUEUE_GITHUB, false],
+    ['peek_github_mirror', 'dequeue_github_mirror', env.QUEUE_GITHUB_MIRROR, true],
+  ]) {
     try {
-      const { mirrorActiveJson } = await import('./handlers/put.js');
-      await mirrorActiveJson(env, putFile, item.platform);
-    } catch (mirrorErr) {
-      console.error('Deferred active.json mirror failed:', mirrorErr.message);
-      try { await writeAction(env, 'enqueue_github_mirror', { platform: item.platform }); } catch {}
-    }
-
-    console.log('Cron: GitHub commit deferred from', item.platform, item.timestamp);
-  } catch (err) {
-    console.error('Cron GitHub pending failed:', err.message);
-    if (item) {
-      try { await writeAction(env, 'enqueue_github', { entry: item }); } catch {}
-    }
-  }
-}
-
-async function processPending(env) {
-  const { writeAction } = await import('./utils/write.js');
-  let item;
-  try {
-    const res = await writeAction(env, 'dequeue_pending');
-    item = res.item;
-    if (!item) return;
-
-    const { classifyMessage } = await import('./services/classify.js');
-
-    const activeRaw = await env.PCP.get('active');
-    const active = JSON.parse(activeRaw || '{"entries":[],"conflicts":[]}');
-
-    const result = await classifyMessage(env, item.message, active, item.timestamp);
-    const applyResult = await writeAction(env, 'apply_classification', { result, timestamp: item.timestamp, message: item.message });
-    if (result.new_entries?.length > 0 || result.new_conflicts?.length > 0 || result.tag_changes?.length > 0) {
-      await env.PCP.put('_sweep_dirty', 'true');
-    }
-
-    console.log('Cron: classified pending from', item.platform, item.timestamp);
-  } catch (err) {
-    console.error('Cron classify failed:', err.message);
-    if (item) {
-      try { await writeAction(env, 'enqueue_pending', { entry: item }); } catch {}
+      const res = await writeAction(env, peekAction);
+      const item = isMirror ? res.platform : res.item;
+      if (!item) continue;
+      const payload = isMirror ? { platform: item } : item;
+      await queue.send(payload);
+      // Only dequeue after successful send
+      await writeAction(env, dequeueAction);
+    } catch (err) {
+      // Item stays in KV — will retry next cron cycle
+      console.error(`KV drain ${peekAction} failed:`, err.message);
     }
   }
 }
@@ -332,9 +315,29 @@ export default {
 
   async scheduled(event, env, ctx) {
     await syncCore(env);
-    await processGitHubPending(env);
-    await repairGitHubMirror(env);
-    await processPending(env);
+    await drainKvFallback(env);
     await consistencySweep(env);
+  },
+
+  async queue(batch, env) {
+    for (const msg of batch.messages) {
+      try {
+        switch (batch.queue) {
+          case 'pending-classify':
+            await handleClassifyMessage(env, msg.body);
+            break;
+          case 'pending-github':
+            await handleGitHubMessage(env, msg.body);
+            break;
+          case 'pending-github-mirror':
+            await handleGitHubMirrorMessage(env, msg.body);
+            break;
+        }
+        msg.ack();
+      } catch (err) {
+        console.error(`Queue ${batch.queue} failed:`, err.message);
+        msg.retry();
+      }
+    }
   },
 };

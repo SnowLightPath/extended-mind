@@ -32,6 +32,9 @@ export class WriteSerializer {
       case 'dequeue_github': return this.dequeueGitHub();
       case 'enqueue_github_mirror': return this.enqueueGitHubMirror(body);
       case 'dequeue_github_mirror': return this.dequeueGitHubMirror();
+      case 'peek_pending': return this.peekPending();
+      case 'peek_github': return this.peekGitHub();
+      case 'peek_github_mirror': return this.peekGitHubMirror();
       default: return Response.json({ error: 'unknown action' }, { status: 400 });
     }
   }
@@ -298,5 +301,38 @@ export class WriteSerializer {
     const platform = queue.shift();
     await this.env.PCP.put('pending_github_mirror', JSON.stringify(queue));
     return Response.json({ platform });
+  }
+
+  // Peek methods — read without removing (for safe drain)
+  async peekPending() {
+    const raw = await this.env.PCP.get('pending_classify');
+    if (!raw) return Response.json({ item: null });
+    let queues = JSON.parse(raw);
+    if (Array.isArray(queues)) {
+      return Response.json({ item: queues[0] || null });
+    }
+    let oldest = null;
+    let oldestKey = null;
+    for (const [key, items] of Object.entries(queues)) {
+      if (items.length > 0 && (!oldest || items[0].timestamp < oldest.timestamp)) {
+        oldest = items[0];
+        oldestKey = key;
+      }
+    }
+    return Response.json({ item: oldest ? { ...oldest, platform: oldestKey } : null });
+  }
+
+  async peekGitHub() {
+    const raw = await this.env.PCP.get('pending_github');
+    if (!raw) return Response.json({ item: null });
+    const queue = JSON.parse(raw);
+    return Response.json({ item: queue[0] || null });
+  }
+
+  async peekGitHubMirror() {
+    const raw = await this.env.PCP.get('pending_github_mirror');
+    if (!raw) return Response.json({ platform: null });
+    const queue = JSON.parse(raw);
+    return Response.json({ platform: queue[0] || null });
   }
 }
