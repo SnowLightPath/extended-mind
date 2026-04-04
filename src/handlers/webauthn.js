@@ -178,6 +178,8 @@ export async function handleAuthVerify(request, env) {
       client_id: authSession.client_id,
       redirect_uri: authSession.redirect_uri,
       created_at: Date.now(),
+      code_challenge: authSession.code_challenge || null,
+      code_challenge_method: authSession.code_challenge_method || null,
     }),
     { expirationTtl: SESSION_TTL },
   );
