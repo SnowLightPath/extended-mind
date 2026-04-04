@@ -282,12 +282,11 @@ export async function handleToken(request, env) {
     return oauthError('invalid_client', 'Authentication failed', 401);
   }
 
-  const codeRaw = await env.PCP.get(`oauth:code:${code}`);
+  const codeKey = `oauth:code:${code}`;
+  const codeRaw = await env.PCP.get(codeKey);
   if (!codeRaw) {
     return oauthError('invalid_grant', 'Authorization code expired or invalid');
   }
-
-  await env.PCP.delete(`oauth:code:${code}`);
 
   let codeData;
   try {
@@ -295,6 +294,29 @@ export async function handleToken(request, env) {
   } catch {
     return oauthError('invalid_grant', 'Authorization code expired or invalid');
   }
+
+  if (codeData.claimed) {
+    return oauthError('invalid_grant', 'Authorization code already used');
+  }
+
+  const claimNonce = randomHex(8);
+  codeData.claimed = claimNonce;
+  await env.PCP.put(codeKey, JSON.stringify(codeData), { expirationTtl: 30 });
+
+  const verifyRaw = await env.PCP.get(codeKey);
+  if (!verifyRaw) {
+    return oauthError('invalid_grant', 'Authorization code expired or invalid');
+  }
+  try {
+    const verifyData = JSON.parse(verifyRaw);
+    if (verifyData.claimed !== claimNonce) {
+      return oauthError('invalid_grant', 'Authorization code already used');
+    }
+  } catch {
+    return oauthError('invalid_grant', 'Authorization code expired or invalid');
+  }
+
+  await env.PCP.delete(codeKey);
 
   if (codeData.client_id !== client_id || codeData.redirect_uri !== redirect_uri) {
     return oauthError('invalid_grant', 'Code does not match client or redirect_uri');
@@ -342,14 +364,16 @@ export async function handleRevoke(request, env) {
     return oauthError('invalid_request', 'Missing token parameter');
   }
 
-  // Authenticate: PCP_TOKEN or client_id + client_secret
+  // Authenticate: PCP_TOKEN (admin) or client_id + client_secret
   const authHeader = request.headers.get('Authorization');
   let authenticated = false;
+  let authenticatedClientId = null;
 
   if (authHeader) {
     const parts = authHeader.split(' ');
     if (parts.length === 2 && parts[0] === 'Bearer' && constantTimeEqual(parts[1], env.PCP_TOKEN)) {
       authenticated = true;
+      // admin: authenticatedClientId stays null, can revoke any token
     }
   }
 
@@ -360,6 +384,7 @@ export async function handleRevoke(request, env) {
         const client = JSON.parse(clientRaw);
         if (constantTimeEqual(client.client_secret || '', params.client_secret || '')) {
           authenticated = true;
+          authenticatedClientId = params.client_id;
         }
       }
     } catch (err) {
@@ -369,6 +394,25 @@ export async function handleRevoke(request, env) {
 
   if (!authenticated) {
     return oauthError('invalid_client', 'Authentication failed', 401);
+  }
+
+  // Enforce client boundary: non-admin can only revoke own tokens
+  if (authenticatedClientId !== null) {
+    const tokenRaw = await env.PCP.get(`oauth:token:${tokenToRevoke}`);
+    if (tokenRaw) {
+      try {
+        const tokenData = JSON.parse(tokenRaw);
+        if (tokenData.client_id !== authenticatedClientId) {
+          // RFC 7009: return 200 to avoid leaking token existence
+          return new Response(JSON.stringify({}), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+          });
+        }
+      } catch {
+        // Corrupt token data — allow deletion as cleanup
+      }
+    }
   }
 
   // RFC 7009: always return 200, even if token doesn't exist

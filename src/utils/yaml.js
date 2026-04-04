@@ -5,14 +5,14 @@ function needsQuote(s, inFlow) {
   if (/^\d/.test(s)) return true;
   if (inFlow && /[,{}[\]]/.test(s)) return true;
   if (/[\n\r\t]/.test(s)) return true;
-  if (/: /.test(s) || /^[&*!|>'"%@`?-]/.test(s) || s.includes('#')) return true;
+  if (/: /.test(s) || /^[&*!|>'"%@`?-]/.test(s) || s.includes('#') || /[<>]/.test(s)) return true;
   return false;
 }
 
 function q(s, inFlow = false) {
   if (typeof s !== 'string') return String(s ?? 'null');
   if (!needsQuote(s, inFlow)) return s;
-  return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t')}"`;
+  return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t').replace(/</g, '\\u003c').replace(/>/g, '\\u003e')}"`;
 }
 
 function isLeaf(obj) {
@@ -295,13 +295,17 @@ function convertTimestamps(obj, timezone) {
   return result;
 }
 
+function sanitizeSectionContent(text) {
+  return text.replace(/<\/?(?:instructions|core|active)>/gi, '');
+}
+
 export function assembleContext(core, active, sessions, timezone) {
   const sections = [];
 
   const instructions = extractInstructions(core);
   if (instructions) {
     sections.push('<instructions>');
-    sections.push(instructions);
+    sections.push(sanitizeSectionContent(instructions));
     sections.push('</instructions>');
   }
 
@@ -313,7 +317,7 @@ export function assembleContext(core, active, sessions, timezone) {
     while (start < lines.length && (lines[start].startsWith('#') || lines[start].trim() === '')) {
       start++;
     }
-    sections.push(lines.slice(start).join('\n').trim());
+    sections.push(sanitizeSectionContent(lines.slice(start).join('\n').trim()));
   } else {
     sections.push('# No context loaded yet. Run seed to initialize.');
   }
@@ -338,7 +342,7 @@ export function assembleContext(core, active, sessions, timezone) {
     const sessionsArr = sessions ? JSON.parse(sessions) : [];
     const localSessions = convertTimestamps(sessionsArr, timezone);
     displayActive.sessions = localSessions;
-    sections.push(`<active>\n${toYaml(displayActive)}\n</active>`);
+    sections.push(`<active>\n${sanitizeSectionContent(toYaml(displayActive))}\n</active>`);
   } catch {
     sections.push('<active>');
     sections.push('sessions: []');

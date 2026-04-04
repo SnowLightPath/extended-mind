@@ -234,7 +234,7 @@ export default {
     }
 
     if (url.pathname.startsWith('/oauth/authorize/webauthn/') && request.method === 'POST') {
-      const { handleRegisterBegin, handleRegisterVerify, handleAuthBegin, handleAuthVerify, handleSkip } = await import('./handlers/webauthn.js');
+      const { handleRegisterBegin, handleRegisterVerify, handleAuthBegin, handleAuthVerify } = await import('./handlers/webauthn.js');
       const sub = url.pathname.replace('/oauth/authorize/webauthn/', '');
       switch (sub) {
         case 'register/begin':
@@ -245,8 +245,6 @@ export default {
           return handleAuthBegin(request, env);
         case 'auth/verify':
           return handleAuthVerify(request, env);
-        case 'skip':
-          return handleSkip(request, env);
         default:
           return json({ error: 'Not found' }, 404);
       }

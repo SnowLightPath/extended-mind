@@ -19,21 +19,15 @@ export async function handleRegisterBegin(request, env) {
     return json({ error: 'Invalid JSON' }, 400);
   }
 
-  const { auth_session_id, csrf_token } = body;
+  const { csrf_token } = body;
 
-  // Auth session flow (from OAuth authorize page)
-  if (auth_session_id) {
-    const authSession = await getAuthSession(env, auth_session_id);
-    if (!authSession || authSession.csrf_token !== csrf_token) {
-      return json({ error: 'Invalid auth session' }, 400);
-    }
-  } else if (csrf_token) {
-    // Standalone /passkey flow (uses csrf: key)
-    const csrfValid = await env.PCP.get(`csrf:${csrf_token}`);
-    if (csrfValid === null) return json({ error: 'Invalid CSRF token' }, 400);
-  } else {
+  if (!csrf_token) {
     return json({ error: 'Missing authentication' }, 400);
   }
+
+  // Standalone /passkey flow only (requires PCP_TOKEN verification first)
+  const csrfValid = await env.PCP.get(`csrf:${csrf_token}`);
+  if (csrfValid === null) return json({ error: 'Invalid CSRF token' }, 400);
 
   const url = new URL(request.url);
   const rpId = url.hostname;
@@ -42,7 +36,7 @@ export async function handleRegisterBegin(request, env) {
 
   await env.PCP.put(
     `webauthn:challenge:${challengeId}`,
-    JSON.stringify({ challenge, type: 'register', auth_session_id: auth_session_id || null }),
+    JSON.stringify({ challenge, type: 'register' }),
     { expirationTtl: CHALLENGE_TTL },
   );
 
@@ -119,32 +113,7 @@ export async function handleRegisterVerify(request, env) {
     }),
   );
 
-  // Standalone registration (no OAuth redirect)
-  const authSession = challengeData.auth_session_id
-    ? await getAuthSession(env, challengeData.auth_session_id)
-    : null;
-
-  if (!authSession || !authSession.redirect_uri) {
-    return json({ ok: true, credential_id: registrationInfo.credential.id });
-  }
-
-  const code = randomHex(32);
-  await env.PCP.put(
-    `oauth:code:${code}`,
-    JSON.stringify({
-      client_id: authSession.client_id,
-      redirect_uri: authSession.redirect_uri,
-      created_at: Date.now(),
-    }),
-    { expirationTtl: SESSION_TTL },
-  );
-
-  const location = new URL(authSession.redirect_uri);
-  location.searchParams.set('code', code);
-  if (authSession.state) location.searchParams.set('state', authSession.state);
-  await env.PCP.delete(`auth:session:${challengeData.auth_session_id}`);
-
-  return json({ redirect: location.toString() });
+  return json({ ok: true, credential_id: registrationInfo.credential.id });
 }
 
 export async function handleAuthVerify(request, env) {
@@ -249,39 +218,6 @@ export async function handleAuthBegin(request, env) {
     rpId: new URL(request.url).hostname,
     userVerification: 'required',
   });
-}
-
-export async function handleSkip(request, env) {
-  let body;
-  try {
-    body = await request.json();
-  } catch {
-    return json({ error: 'Invalid JSON' }, 400);
-  }
-
-  const { auth_session_id, csrf_token } = body;
-  const authSession = await getAuthSession(env, auth_session_id);
-  if (!authSession || authSession.csrf_token !== csrf_token) {
-    return json({ error: 'Invalid auth session' }, 400);
-  }
-
-  const code = randomHex(32);
-  await env.PCP.put(
-    `oauth:code:${code}`,
-    JSON.stringify({
-      client_id: authSession.client_id,
-      redirect_uri: authSession.redirect_uri,
-      created_at: Date.now(),
-    }),
-    { expirationTtl: SESSION_TTL },
-  );
-
-  const location = new URL(authSession.redirect_uri);
-  location.searchParams.set('code', code);
-  if (authSession.state) location.searchParams.set('state', authSession.state);
-  await env.PCP.delete(`auth:session:${auth_session_id}`);
-
-  return json({ redirect: location.toString() });
 }
 
 function passkeyManagePage() {
