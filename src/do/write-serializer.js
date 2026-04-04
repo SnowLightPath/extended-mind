@@ -26,6 +26,7 @@ export class WriteSerializer {
       case 'append_session': return this.appendSession(body);
       case 'apply_classification': return this.applyClassification(body);
       case 'gc_active': return this.gcActive();
+      case 'check_rate_limit': return this.checkRateLimit(body);
       case 'enqueue_pending': return this.enqueuePending(body);
       case 'dequeue_pending': return this.dequeuePending();
       case 'enqueue_github': return this.enqueueGitHub(body);
@@ -334,5 +335,30 @@ export class WriteSerializer {
     if (!raw) return Response.json({ platform: null });
     const queue = JSON.parse(raw);
     return Response.json({ platform: queue[0] || null });
+  }
+
+  async checkRateLimit({ ip, weight }) {
+    const key = `_rate:${ip}`;
+    const now = Date.now();
+    const windowMs = 60_000;
+    const maxRequests = 60;
+
+    const raw = await this.state.storage.get(key);
+    let bucket = raw || { count: 0, reset: now + windowMs };
+
+    if (now >= bucket.reset) {
+      bucket = { count: 0, reset: now + windowMs };
+    }
+
+    bucket.count += (weight || 1);
+    const allowed = bucket.count <= maxRequests;
+
+    await this.state.storage.put(key, bucket);
+
+    if (!this.state.storage.getAlarm()) {
+      await this.state.storage.setAlarm(bucket.reset);
+    }
+
+    return Response.json({ allowed, remaining: Math.max(0, maxRequests - bucket.count) });
   }
 }

@@ -1,4 +1,4 @@
-import { authenticateWithOAuth } from './utils/auth.js';
+import { authenticateWithOAuth, constantTimeEqual } from './utils/auth.js';
 import { checkRateLimit, FAILURE_WEIGHT } from './utils/rate-limit.js';
 import { tools } from './tools.js';
 import { handleGet } from './handlers/get.js';
@@ -49,7 +49,7 @@ async function verifySessionId(env, sid) {
     const expected = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(data));
     const expectedHex = Array.from(new Uint8Array(expected)).slice(0, 16)
       .map(b => b.toString(16).padStart(2, '0')).join('');
-    if (sig !== expectedHex) return null;
+    if (!constantTimeEqual(sig, expectedHex)) return null;
     return JSON.parse(data);
   } catch {
     return null;

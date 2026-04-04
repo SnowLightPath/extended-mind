@@ -85,7 +85,7 @@ async function callProvider(env, system, message, schema) {
   }
 }
 
-function validateClassifyResult(result) {
+export function validateClassifyResult(result) {
   if (!result || typeof result !== 'object') throw new Error('Invalid classify result');
 
   for (const key of ['new_entries', 'tag_changes', 'new_conflicts', 'resolved_conflicts']) {
