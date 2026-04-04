@@ -50,6 +50,21 @@ async function syncCore(env) {
   }
 }
 
+async function repairGitHubMirror(env) {
+  try {
+    const { writeAction } = await import('./utils/write.js');
+    const { platform } = await writeAction(env, 'dequeue_github_mirror');
+    if (!platform) return;
+
+    const { putFile } = await import('./services/github.js');
+    const { mirrorActiveJson } = await import('./handlers/put.js');
+    await mirrorActiveJson(env, putFile, platform);
+    console.log('Cron: repaired active.json mirror for', platform);
+  } catch (err) {
+    console.error('Cron mirror repair failed:', err.message);
+  }
+}
+
 async function processGitHubPending(env) {
   const { writeAction } = await import('./utils/write.js');
   let item;
@@ -63,11 +78,12 @@ async function processGitHubPending(env) {
     const yearMonth = date.slice(0, 7);
     const sessionPath = `sessions/${yearMonth}/${date}_${item.platform}.md`;
     const existing = await getFile(env, sessionPath);
+    const sha = existing?.sha ?? null;
     const newEntry = `\n---\n_${item.timestamp}_\n\n${item.message}`;
     const content = existing
       ? existing.content + newEntry
       : `# Session: ${date} (${item.platform})\n${newEntry}`;
-    await putFile(env, sessionPath, content, `log from ${item.platform} at ${item.timestamp} (deferred)`);
+    await putFile(env, sessionPath, content, `log from ${item.platform} at ${item.timestamp} (deferred)`, sha);
 
     // Mirror active.json to GitHub
     try {
@@ -75,6 +91,7 @@ async function processGitHubPending(env) {
       await mirrorActiveJson(env, putFile, item.platform);
     } catch (mirrorErr) {
       console.error('Deferred active.json mirror failed:', mirrorErr.message);
+      try { await writeAction(env, 'enqueue_github_mirror', { platform: item.platform }); } catch {}
     }
 
     console.log('Cron: GitHub commit deferred from', item.platform, item.timestamp);
@@ -316,6 +333,7 @@ export default {
   async scheduled(event, env, ctx) {
     await syncCore(env);
     await processGitHubPending(env);
+    await repairGitHubMirror(env);
     await processPending(env);
     await consistencySweep(env);
   },

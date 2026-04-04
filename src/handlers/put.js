@@ -31,10 +31,22 @@ export async function handlePut(args, env, platform, ctx) {
 async function asyncWriteAndProcess(env, message, timestamp, platform) {
   await writeAction(env, 'append_session', { entry: { timestamp, platform, message } });
 
-  await Promise.allSettled([
-    commitToGitHub(env, message, timestamp, platform),
+  // Session commit and classification run in parallel
+  const [sessionResult, classifyResult] = await Promise.allSettled([
+    commitSessionToGitHub(env, message, timestamp, platform),
     message.length >= MIN_CLASSIFY_LENGTH ? classifyAndUpdate(env, message, timestamp, platform) : Promise.resolve(),
   ]);
+
+  // Mirror active.json AFTER classification completes (so it includes new entries)
+  try {
+    const { putFile } = await import('../services/github.js');
+    await mirrorActiveJson(env, putFile, platform);
+  } catch (err) {
+    console.error('active.json mirror failed (deferred):', err.message);
+    try {
+      await writeAction(env, 'enqueue_github_mirror', { platform });
+    } catch {}
+  }
 }
 
 
@@ -50,7 +62,7 @@ export async function mirrorActiveJson(env, putFile, platform) {
   }
 }
 
-async function commitToGitHub(env, message, timestamp, platform, retries = 1) {
+async function commitSessionToGitHub(env, message, timestamp, platform, retries = 1) {
   try {
     const { getFile, putFile } = await import('../services/github.js');
     const date = timestamp.split('T')[0];
@@ -58,29 +70,19 @@ async function commitToGitHub(env, message, timestamp, platform, retries = 1) {
     const yearMonth = date.slice(0, 7);
     const sessionPath = `sessions/${yearMonth}/${date}_${platform}.md`;
     const existing = await getFile(env, sessionPath);
+    const sha = existing?.sha ?? null;
     const newEntry = `\n---\n_${timestamp}_\n\n${message}`;
     const sessionContent = existing
       ? existing.content + newEntry
       : `# Session: ${date} (${platform})\n${newEntry}`;
-    await putFile(env, sessionPath, sessionContent, `log from ${platform} at ${timestamp}`);
-
-    // GitHub mirror (separate error handling to avoid session re-append on retry)
-    try {
-      await mirrorActiveJson(env, putFile, platform);
-    } catch (mirrorErr) {
-      if (mirrorErr.message.includes('409')) {
-        try { await mirrorActiveJson(env, putFile, platform); } catch {}
-      } else {
-        console.error('GitHub active.json mirror failed:', mirrorErr.message);
-      }
-    }
+    await putFile(env, sessionPath, sessionContent, `log from ${platform} at ${timestamp}`, sha);
 
     console.log('GitHub commit:', sessionPath);
   } catch (err) {
     if (retries > 0 && err.message.includes('409')) {
-      return commitToGitHub(env, message, timestamp, platform, retries - 1);
+      return commitSessionToGitHub(env, message, timestamp, platform, retries - 1);
     }
-    console.error('GitHub commit failed (deferred):', err.message);
+    console.error('GitHub session commit failed (deferred):', err.message);
     try {
       await writeAction(env, 'enqueue_github', { entry: { message, timestamp, platform } });
     } catch {}

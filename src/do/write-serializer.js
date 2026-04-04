@@ -30,6 +30,8 @@ export class WriteSerializer {
       case 'dequeue_pending': return this.dequeuePending();
       case 'enqueue_github': return this.enqueueGitHub(body);
       case 'dequeue_github': return this.dequeueGitHub();
+      case 'enqueue_github_mirror': return this.enqueueGitHubMirror(body);
+      case 'dequeue_github_mirror': return this.dequeueGitHubMirror();
       default: return Response.json({ error: 'unknown action' }, { status: 400 });
     }
   }
@@ -275,5 +277,26 @@ export class WriteSerializer {
     const item = queue.shift();
     await this.env.PCP.put('pending_github', JSON.stringify(queue));
     return Response.json({ item });
+  }
+
+  async enqueueGitHubMirror({ platform }) {
+    const raw = await this.env.PCP.get('pending_github_mirror');
+    const queue = raw ? JSON.parse(raw) : [];
+    // Deduplicate — only one pending mirror per platform
+    if (!queue.includes(platform)) {
+      queue.push(platform);
+    }
+    await this.env.PCP.put('pending_github_mirror', JSON.stringify(queue));
+    return Response.json({ ok: true });
+  }
+
+  async dequeueGitHubMirror() {
+    const raw = await this.env.PCP.get('pending_github_mirror');
+    if (!raw) return Response.json({ platform: null });
+    const queue = JSON.parse(raw);
+    if (queue.length === 0) return Response.json({ platform: null });
+    const platform = queue.shift();
+    await this.env.PCP.put('pending_github_mirror', JSON.stringify(queue));
+    return Response.json({ platform });
   }
 }

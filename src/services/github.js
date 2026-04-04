@@ -32,10 +32,13 @@ export async function getFileFromRepo(env, repo, path) {
   return { content: fromBase64(data.content), sha: data.sha };
 }
 
-export async function putFile(env, path, content, message) {
-  const existing = await getFile(env, path);
+export async function putFile(env, path, content, message, sha) {
+  if (sha === undefined) {
+    const existing = await getFile(env, path);
+    sha = existing ? existing.sha : null;
+  }
   const body = { message, content: toBase64(content) };
-  if (existing) body.sha = existing.sha;
+  if (sha) body.sha = sha;
 
   const res = await fetch(`${API}/repos/${env.GITHUB_REPO}/contents/${path}`, {
     method: 'PUT',
