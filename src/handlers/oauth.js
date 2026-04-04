@@ -295,32 +295,20 @@ export async function handleToken(request, env) {
     return oauthError('invalid_grant', 'Authorization code expired or invalid');
   }
 
-  if (codeData.claimed) {
-    return oauthError('invalid_grant', 'Authorization code already used');
-  }
-
-  const claimNonce = randomHex(8);
-  codeData.claimed = claimNonce;
-  await env.PCP.put(codeKey, JSON.stringify(codeData), { expirationTtl: 30 });
-
-  const verifyRaw = await env.PCP.get(codeKey);
-  if (!verifyRaw) {
-    return oauthError('invalid_grant', 'Authorization code expired or invalid');
-  }
-  try {
-    const verifyData = JSON.parse(verifyRaw);
-    if (verifyData.claimed !== claimNonce) {
-      return oauthError('invalid_grant', 'Authorization code already used');
-    }
-  } catch {
-    return oauthError('invalid_grant', 'Authorization code expired or invalid');
-  }
-
-  await env.PCP.delete(codeKey);
-
   if (codeData.client_id !== client_id || codeData.redirect_uri !== redirect_uri) {
     return oauthError('invalid_grant', 'Code does not match client or redirect_uri');
   }
+
+  // Atomic single-use claim via Durable Object
+  const doId = env.CODE_REDEMPTION.idFromName(code);
+  const stub = env.CODE_REDEMPTION.get(doId);
+  const claimRes = await stub.fetch(new Request('https://do/claim', { method: 'POST' }));
+  const claimData = await claimRes.json();
+  if (!claimData.ok) {
+    return oauthError('invalid_grant', 'Authorization code already used');
+  }
+
+  await env.PCP.delete(codeKey);
 
   const accessToken = `pcp_oauth_${randomHex(32)}`;
   await env.PCP.put(

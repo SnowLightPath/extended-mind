@@ -2,13 +2,17 @@
   "name": "extended-mind",
   "version": "1.0.0",
   "description": "Personal Context Protocol — MCP server for shared context across AI platforms",
+  "type": "module",
   "main": "src/index.js",
   "scripts": {
     "dev": "npx wrangler dev",
     "deploy": "npx wrangler deploy",
-    "seed": "node seed/seed-kv.js"
+    "seed": "node seed/seed-kv.js",
+    "test": "vitest run"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.14.1",
+    "vitest": "^4.1.2",
     "wrangler": "^4"
   },
   "dependencies": {

@@ -3,6 +3,8 @@ import { tools } from './tools.js';
 import { handleGet } from './handlers/get.js';
 import { handlePut } from './handlers/put.js';
 import { handleAuthorizeGet, handleAuthorizePost, handleToken, handleRevoke } from './handlers/oauth.js';
+export { CodeRedemption } from './do/code-redemption.js';
+export { WriteSerializer } from './do/write-serializer.js';
 function json(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
     status,
@@ -48,96 +50,80 @@ async function syncCore(env) {
   }
 }
 
-async function processPending(env) {
+async function processGitHubPending(env) {
+  const { writeAction } = await import('./utils/write.js');
+  let item;
   try {
-    const raw = await env.PCP.get('pending_classify');
-    if (!raw) return;
-    const queue = JSON.parse(raw);
-    if (queue.length === 0) return;
+    const res = await writeAction(env, 'dequeue_github');
+    item = res.item;
+    if (!item) return;
+
+    const { getFile, putFile } = await import('./services/github.js');
+    const date = item.timestamp.split('T')[0];
+    const yearMonth = date.slice(0, 7);
+    const sessionPath = `sessions/${yearMonth}/${date}_${item.platform}.md`;
+    const existing = await getFile(env, sessionPath);
+    const newEntry = `\n---\n_${item.timestamp}_\n\n${item.message}`;
+    const content = existing
+      ? existing.content + newEntry
+      : `# Session: ${date} (${item.platform})\n${newEntry}`;
+    await putFile(env, sessionPath, content, `log from ${item.platform} at ${item.timestamp} (deferred)`);
+
+    // Mirror active.json to GitHub
+    try {
+      const { mirrorActiveJson } = await import('./handlers/put.js');
+      await mirrorActiveJson(env, putFile, item.platform);
+    } catch (mirrorErr) {
+      console.error('Deferred active.json mirror failed:', mirrorErr.message);
+    }
+
+    console.log('Cron: GitHub commit deferred from', item.platform, item.timestamp);
+  } catch (err) {
+    console.error('Cron GitHub pending failed:', err.message);
+    if (item) {
+      try { await writeAction(env, 'enqueue_github', { entry: item }); } catch {}
+    }
+  }
+}
+
+async function processPending(env) {
+  const { writeAction } = await import('./utils/write.js');
+  let item;
+  try {
+    const res = await writeAction(env, 'dequeue_pending');
+    item = res.item;
+    if (!item) return;
 
     const { classifyMessage } = await import('./services/classify.js');
-    const { applyClassification } = await import('./handlers/put.js');
-
-    const item = queue[0];
 
     const activeRaw = await env.PCP.get('active');
     const active = JSON.parse(activeRaw || '{"entries":[],"conflicts":[]}');
 
     const result = await classifyMessage(env, item.message, active, item.timestamp);
-    await applyClassification(env, result, item.timestamp, item.message);
-    if (result.new_conflicts?.length > 0 || result.tag_changes?.length > 0) {
+    const applyResult = await writeAction(env, 'apply_classification', { result, timestamp: item.timestamp, message: item.message });
+    if (result.new_entries?.length > 0 || result.new_conflicts?.length > 0 || result.tag_changes?.length > 0) {
       await env.PCP.put('_sweep_dirty', 'true');
     }
-
-    // Dequeue after successful processing (apply is idempotent)
-    queue.shift();
-    await env.PCP.put('pending_classify', JSON.stringify(queue));
 
     console.log('Cron: classified pending from', item.platform, item.timestamp);
   } catch (err) {
     console.error('Cron classify failed:', err.message);
+    if (item) {
+      try { await writeAction(env, 'enqueue_pending', { entry: item }); } catch {}
+    }
   }
 }
 
-const ENTRY_TTL_MS = 30 * 24 * 3600 * 1000;
-const CONFLICT_TTL_MS = 72 * 3600 * 1000;
-
 async function consistencySweep(env) {
   try {
-    const activeRaw = await env.PCP.get('active');
-    if (!activeRaw) return;
-    const active = JSON.parse(activeRaw);
+    const { writeAction } = await import('./utils/write.js');
 
-    // GC step (no LLM) — runs every cron regardless of _sweep_dirty
-    const now = Date.now();
-    let gcChanged = false;
-
-    // 1a. Expire entries past TTL
-    for (const entry of active.entries) {
-      if (entry.tag !== 'stale' && entry.expires_at && new Date(entry.expires_at).getTime() < now) {
-        entry.tag = 'stale';
-        gcChanged = true;
-      }
+    // GC step via DO (serialized read-modify-write)
+    const gcResult = await writeAction(env, 'gc_active');
+    if (gcResult.changed) {
+      console.log('GC:', { entries: gcResult.entries, conflicts: gcResult.conflicts });
     }
-
-    // 1b. Remove stale entries
-    const beforeLen = active.entries.length;
-    active.entries = active.entries.filter(e => e.tag !== 'stale');
-    if (active.entries.length !== beforeLen) gcChanged = true;
-
-    // 1c. Remove expired or orphaned conflicts
-    if (active.conflicts?.length > 0) {
-      const entryIds = new Set(active.entries.map(e => e.id));
-      const beforeConflicts = active.conflicts.length;
-
-      active.conflicts = active.conflicts.filter(c => {
-        if (c.created_at && new Date(c.created_at).getTime() + CONFLICT_TTL_MS < now) return false;
-        if (c.ids.some(id => !entryIds.has(id))) return false;
-        return true;
-      });
-
-      if (active.conflicts.length !== beforeConflicts) gcChanged = true;
-    }
-
-    // 1d. Restore conflict-tagged entries not referenced by any remaining conflict
-    let needResweep = false;
-    const stillConflictedIds = new Set((active.conflicts || []).flatMap(c => c.ids));
-    for (const entry of active.entries) {
-      if (entry.tag === 'conflict' && !stillConflictedIds.has(entry.id)) {
-        entry.tag = 'active';
-        entry.expires_at = new Date(now + ENTRY_TTL_MS).toISOString();
-        gcChanged = true;
-        needResweep = true;
-      }
-    }
-
-    if (gcChanged) {
-      await env.PCP.put('active', JSON.stringify(active));
-      const { invalidateCache } = await import('./utils/cache.js');
-      await invalidateCache(env);
-      console.log('GC:', { entries: active.entries.length, conflicts: active.conflicts?.length || 0 });
-    }
-    if (needResweep) {
+    if (gcResult.needResweep) {
       await env.PCP.put('_sweep_dirty', 'true');
     }
 
@@ -153,8 +139,7 @@ async function consistencySweep(env) {
     const result = await classifySweep(env, freshActive);
     const hasChanges = result.tag_changes?.length > 0 || result.new_conflicts?.length > 0 || result.resolved_conflicts?.length > 0;
     if (hasChanges) {
-      const { applyClassification } = await import('./handlers/put.js');
-      await applyClassification(env, result, new Date().toISOString(), '[consistency sweep]');
+      const applyResult = await writeAction(env, 'apply_classification', { result, timestamp: new Date().toISOString(), message: '[consistency sweep]' });
       console.log('Sweep:', { tag_changes: result.tag_changes?.length || 0, new_conflicts: result.new_conflicts?.length || 0 });
     }
 
@@ -330,6 +315,7 @@ export default {
 
   async scheduled(event, env, ctx) {
     await syncCore(env);
+    await processGitHubPending(env);
     await processPending(env);
     await consistencySweep(env);
   },
