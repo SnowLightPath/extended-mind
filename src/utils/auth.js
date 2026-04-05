@@ -43,6 +43,24 @@ export async function authenticateWithOAuth(request, env) {
     }
   }
 
+  // Backward compat: try plaintext key (pre-hash migration) and migrate
+  if (token.startsWith('pcp_oauth_')) {
+    const legacyRaw = await env.PCP.get(`oauth:token:${token}`);
+    if (legacyRaw) {
+      try {
+        const data = JSON.parse(legacyRaw);
+        const TOKEN_TTL = 7776000; // 90 days — match oauth.js
+        const elapsed = data.created_at ? Math.floor((Date.now() - data.created_at) / 1000) : 0;
+        const ttl = Math.max(TOKEN_TTL - elapsed, 60);
+        await env.PCP.put(`oauth:token:${tokenHash}`, legacyRaw, { expirationTtl: ttl });
+        await env.PCP.delete(`oauth:token:${token}`);
+        return { ok: true, platform: data.platform };
+      } catch {
+        return { ok: false };
+      }
+    }
+  }
+
   return { ok: false };
 }
 

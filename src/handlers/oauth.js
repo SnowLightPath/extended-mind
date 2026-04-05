@@ -14,6 +14,7 @@ function html(body, status = 200) {
     status,
     headers: {
       'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
       'X-Frame-Options': 'DENY',
       'X-Content-Type-Options': 'nosniff',
       'Content-Security-Policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; form-action 'self'",
@@ -236,6 +237,8 @@ export async function handleAuthorizePost(request, env) {
       client_id: authSession.client_id,
       redirect_uri: authSession.redirect_uri,
       state: authSession.state,
+      code_challenge: authSession.code_challenge,
+      code_challenge_method: authSession.code_challenge_method,
     });
     await env.PCP.delete(`auth:session:${authSessionId}`);
     return authorizePage(client.name, newAuthSessionId, newCsrf, 'Invalid token — please try again');
@@ -419,26 +422,31 @@ export async function handleRevoke(request, env) {
 
   // Enforce client boundary: non-admin can only revoke own tokens
   const revokeHash = await hashToken(tokenToRevoke);
-  if (authenticatedClientId !== null) {
-    const tokenRaw = await env.PCP.get(`oauth:token:${revokeHash}`);
-    if (tokenRaw) {
-      try {
-        const tokenData = JSON.parse(tokenRaw);
-        if (tokenData.client_id !== authenticatedClientId) {
-          // RFC 7009: return 200 to avoid leaking token existence
-          return new Response(JSON.stringify({}), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
-          });
-        }
-      } catch {
-        // Corrupt token data — allow deletion as cleanup
+  // Check hashed key first, then legacy plaintext key
+  let tokenRaw = await env.PCP.get(`oauth:token:${revokeHash}`);
+  let legacyKey = null;
+  if (!tokenRaw && tokenToRevoke.startsWith('pcp_oauth_')) {
+    tokenRaw = await env.PCP.get(`oauth:token:${tokenToRevoke}`);
+    if (tokenRaw) legacyKey = `oauth:token:${tokenToRevoke}`;
+  }
+  if (authenticatedClientId !== null && tokenRaw) {
+    try {
+      const tokenData = JSON.parse(tokenRaw);
+      if (tokenData.client_id !== authenticatedClientId) {
+        // RFC 7009: return 200 to avoid leaking token existence
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+        });
       }
+    } catch {
+      // Corrupt token data — allow deletion as cleanup
     }
   }
 
   // RFC 7009: always return 200, even if token doesn't exist
   await env.PCP.delete(`oauth:token:${revokeHash}`);
+  if (legacyKey) await env.PCP.delete(legacyKey);
 
   return new Response(JSON.stringify({}), {
     status: 200,

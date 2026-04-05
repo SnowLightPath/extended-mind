@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { env, SELF } from 'cloudflare:test';
-import { handleToken, handleAuthorizeGet } from '../src/handlers/oauth.js';
+import { handleToken, handleAuthorizeGet, handleRevoke } from '../src/handlers/oauth.js';
+import { authenticateWithOAuth, hashToken } from '../src/utils/auth.js';
 import { validateClassifyResult } from '../src/services/classify.js';
 import { assembleContext } from '../src/utils/yaml.js';
 
@@ -86,6 +87,7 @@ describe('Security headers', () => {
     expect(res.headers.get('X-Frame-Options')).toBe('DENY');
     expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
     expect(res.headers.get('Content-Security-Policy')).toBeTruthy();
+    expect(res.headers.get('Cache-Control')).toBe('no-store, no-cache, must-revalidate');
   });
 });
 
@@ -347,5 +349,58 @@ describe('Rate limit coverage on auth endpoints', () => {
     });
     const body = await res.json();
     expect(body.code_challenge_methods_supported).toContain('S256');
+  });
+});
+
+// --- Legacy token backward compatibility & migration ---
+
+describe('Legacy token migration', () => {
+  it('authenticates with legacy plaintext-keyed token and migrates to hashed key', async () => {
+    const token = 'pcp_oauth_legacy_migration_test';
+    const tokenData = JSON.stringify({ client_id: 'test', platform: 'claude-chat', created_at: Date.now() });
+    // Store with plaintext key (pre-hash format)
+    await env.PCP.put(`oauth:token:${token}`, tokenData);
+
+    const request = new Request('https://host/mcp', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const result = await authenticateWithOAuth(request, env);
+    expect(result.ok).toBe(true);
+    expect(result.platform).toBe('claude-chat');
+
+    // Verify migration: hashed key exists, plaintext key deleted
+    const hashed = await hashToken(token);
+    expect(await env.PCP.get(`oauth:token:${hashed}`)).toBe(tokenData);
+    expect(await env.PCP.get(`oauth:token:${token}`)).toBeNull();
+  });
+
+  it('does not attempt legacy lookup for non-pcp_oauth_ tokens', async () => {
+    const token = 'arbitrary_token_value';
+    await env.PCP.put(`oauth:token:${token}`, JSON.stringify({ client_id: 'test', platform: 'test' }));
+
+    const request = new Request('https://host/mcp', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const result = await authenticateWithOAuth(request, env);
+    expect(result.ok).toBe(false);
+  });
+
+  it('revokes legacy plaintext-keyed token', async () => {
+    const token = 'pcp_oauth_legacy_revoke_test';
+    const tokenData = JSON.stringify({ client_id: 'test', platform: 'test', created_at: Date.now() });
+    await env.PCP.put(`oauth:token:${token}`, tokenData);
+
+    const res = await handleRevoke(
+      new Request('https://host/oauth/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.PCP_TOKEN}` },
+        body: JSON.stringify({ token }),
+      }),
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(await env.PCP.get(`oauth:token:${token}`)).toBeNull();
   });
 });
