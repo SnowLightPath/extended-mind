@@ -1,4 +1,11 @@
-import { getAuthSession, constantTimeEqual, randomHex, hashToken } from '../utils/auth.js';
+import {
+  getAuthSession,
+  constantTimeEqual,
+  randomHex,
+  hashToken,
+  signAuthSession,
+  verifyAuthSession,
+} from '../utils/auth.js';
 
 const CODE_TTL = 600;
 const CSRF_TTL = 600;
@@ -43,19 +50,26 @@ function escapeHtml(str) {
 async function createAuthSession(env, { client_id, redirect_uri, state, code_challenge, code_challenge_method }) {
   const authSessionId = randomHex(16);
   const csrfToken = randomHex(16);
+  const issuedAt = Date.now();
+  const authSession = {
+    client_id,
+    redirect_uri,
+    state,
+    csrf_token: csrfToken,
+    code_challenge: code_challenge || null,
+    code_challenge_method: code_challenge ? (code_challenge_method || 'S256') : null,
+    issued_at: issuedAt,
+  };
   await env.PCP.put(
     `auth:session:${authSessionId}`,
-    JSON.stringify({
-      client_id, redirect_uri, state, csrf_token: csrfToken,
-      code_challenge: code_challenge || null,
-      code_challenge_method: code_challenge ? (code_challenge_method || 'S256') : null,
-    }),
+    JSON.stringify(authSession),
     { expirationTtl: CSRF_TTL },
   );
-  return { authSessionId, csrfToken };
+  const authSessionToken = await signAuthSession(env, authSession);
+  return { authSessionId, csrfToken, authSessionToken };
 }
 
-function authorizePage(clientName, authSessionId, csrfToken, errorMsg) {
+function authorizePage(clientName, authSessionId, csrfToken, authSessionToken, errorMsg) {
   return html(`<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -81,6 +95,7 @@ ${errorMsg ? `<div class="error">${escapeHtml(errorMsg)}</div>` : ''}
 <form method="POST" action="/oauth/authorize">
 <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
 <input type="hidden" name="auth_session_id" value="${escapeHtml(authSessionId)}">
+<input type="hidden" name="auth_session" value="${escapeHtml(authSessionToken)}">
 <label for="token">PCP Token</label>
 <input type="password" id="token" name="token" required placeholder="Enter your PCP token" autocomplete="username webauthn">
 <button type="submit">Authorize</button>
@@ -186,7 +201,7 @@ export async function handleAuthorizeGet(url, env) {
     return html('<p>Error: Invalid request</p>', 400);
   }
 
-  const { authSessionId, csrfToken } = await createAuthSession(env, {
+  const { authSessionId, csrfToken, authSessionToken } = await createAuthSession(env, {
     client_id: clientId,
     redirect_uri: redirectUri,
     state,
@@ -194,7 +209,7 @@ export async function handleAuthorizeGet(url, env) {
     code_challenge_method: codeChallenge ? codeChallengeMethod : null,
   });
 
-  return authorizePage(client.name, authSessionId, csrfToken);
+  return authorizePage(client.name, authSessionId, csrfToken, authSessionToken);
 }
 
 export async function handleAuthorizePost(request, env) {
@@ -207,12 +222,24 @@ export async function handleAuthorizePost(request, env) {
   const csrfToken = form.get('csrf_token');
   const token = form.get('token');
   const authSessionId = form.get('auth_session_id');
+  const authSessionToken = form.get('auth_session');
 
-  if (!csrfToken || !authSessionId) {
+  if (!csrfToken || (!authSessionId && !authSessionToken)) {
     return html('<p>Error: Invalid request — please try again from the authorization link</p>', 400);
   }
 
-  const authSession = await getAuthSession(env, authSessionId);
+  let authSession = await getAuthSession(env, authSessionId);
+  if (!authSession || !constantTimeEqual(authSession.csrf_token || '', csrfToken || '')) {
+    const signedSession = await verifyAuthSession(env, authSessionToken);
+    const signedSessionFresh = signedSession
+      && typeof signedSession.issued_at === 'number'
+      && Date.now() - signedSession.issued_at <= CSRF_TTL * 1000;
+    if (signedSessionFresh && constantTimeEqual(signedSession.csrf_token || '', csrfToken || '')) {
+      authSession = signedSession;
+    } else {
+      authSession = null;
+    }
+  }
   if (!authSession || !constantTimeEqual(authSession.csrf_token || '', csrfToken || '')) {
     return html('<p>Error: Invalid request — please try again from the authorization link</p>', 400);
   }
@@ -233,7 +260,11 @@ export async function handleAuthorizePost(request, env) {
   }
 
   if (!constantTimeEqual(token, env.PCP_TOKEN)) {
-    const { authSessionId: newAuthSessionId, csrfToken: newCsrf } = await createAuthSession(env, {
+    const {
+      authSessionId: newAuthSessionId,
+      csrfToken: newCsrf,
+      authSessionToken: newAuthSessionToken,
+    } = await createAuthSession(env, {
       client_id: authSession.client_id,
       redirect_uri: authSession.redirect_uri,
       state: authSession.state,
@@ -241,7 +272,7 @@ export async function handleAuthorizePost(request, env) {
       code_challenge_method: authSession.code_challenge_method,
     });
     await env.PCP.delete(`auth:session:${authSessionId}`);
-    return authorizePage(client.name, newAuthSessionId, newCsrf, 'Invalid token — please try again');
+    return authorizePage(client.name, newAuthSessionId, newCsrf, newAuthSessionToken, 'Invalid token — please try again');
   }
 
   await env.PCP.delete(`auth:session:${authSessionId}`);

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { env, SELF } from 'cloudflare:test';
-import { handleToken, handleAuthorizeGet, handleRevoke } from '../src/handlers/oauth.js';
+import { handleToken, handleAuthorizeGet, handleAuthorizePost, handleRevoke } from '../src/handlers/oauth.js';
 import { authenticateWithOAuth, hashToken } from '../src/utils/auth.js';
 import { validateClassifyResult } from '../src/services/classify.js';
 import { assembleContext } from '../src/utils/yaml.js';
@@ -88,6 +88,86 @@ describe('Security headers', () => {
     expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
     expect(res.headers.get('Content-Security-Policy')).toBeTruthy();
     expect(res.headers.get('Cache-Control')).toBe('no-store, no-cache, must-revalidate');
+  });
+});
+
+describe('OAuth authorize session fallback', () => {
+  const CLIENT = 'authorize-fallback-client';
+  const REDIRECT = 'https://example.com/callback';
+
+  beforeAll(async () => {
+    await env.PCP.put(`oauth:client:${CLIENT}`, JSON.stringify({
+      name: 'Authorize Fallback Client',
+      redirect_uris: [REDIRECT],
+    }));
+  });
+
+  function extractHidden(page, name) {
+    const match = page.match(new RegExp(`<input type="hidden" name="${name}" value="([^"]*)">`));
+    expect(match, `missing hidden field ${name}`).toBeTruthy();
+    return match[1];
+  }
+
+  it('accepts signed authorize session when KV session is unavailable', async () => {
+    const url = new URL(
+      `https://host/oauth/authorize?client_id=${CLIENT}&redirect_uri=${encodeURIComponent(REDIRECT)}&response_type=code&state=kv-miss`,
+    );
+    const getRes = await handleAuthorizeGet(url, env);
+    expect(getRes.status).toBe(200);
+    const page = await getRes.text();
+
+    const csrfToken = extractHidden(page, 'csrf_token');
+    const authSessionId = extractHidden(page, 'auth_session_id');
+    const authSession = extractHidden(page, 'auth_session');
+
+    await env.PCP.delete(`auth:session:${authSessionId}`);
+
+    const postRes = await handleAuthorizePost(new Request('https://host/oauth/authorize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        csrf_token: csrfToken,
+        auth_session_id: authSessionId,
+        auth_session: authSession,
+        token: env.PCP_TOKEN,
+      }),
+    }), env);
+
+    expect(postRes.status).toBe(302);
+    const location = new URL(postRes.headers.get('Location'));
+    expect(location.origin + location.pathname).toBe(REDIRECT);
+    expect(location.searchParams.get('state')).toBe('kv-miss');
+    expect(location.searchParams.get('code')).toBeTruthy();
+  });
+
+  it('rejects tampered signed authorize session when KV session is unavailable', async () => {
+    const url = new URL(
+      `https://host/oauth/authorize?client_id=${CLIENT}&redirect_uri=${encodeURIComponent(REDIRECT)}&response_type=code&state=tampered`,
+    );
+    const getRes = await handleAuthorizeGet(url, env);
+    expect(getRes.status).toBe(200);
+    const page = await getRes.text();
+
+    const csrfToken = extractHidden(page, 'csrf_token');
+    const authSessionId = extractHidden(page, 'auth_session_id');
+    const authSession = extractHidden(page, 'auth_session');
+    const tamperedSession = `${authSession.slice(0, -1)}${authSession.endsWith('A') ? 'B' : 'A'}`;
+
+    await env.PCP.delete(`auth:session:${authSessionId}`);
+
+    const postRes = await handleAuthorizePost(new Request('https://host/oauth/authorize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        csrf_token: csrfToken,
+        auth_session_id: authSessionId,
+        auth_session: tamperedSession,
+        token: env.PCP_TOKEN,
+      }),
+    }), env);
+
+    expect(postRes.status).toBe(400);
+    expect(await postRes.text()).toContain('authorization link');
   });
 });
 

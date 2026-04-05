@@ -9,6 +9,20 @@ export async function hashToken(token) {
   return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+async function signWithPcpToken(env, data) {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(env.PCP_TOKEN),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(data));
+  return Array.from(new Uint8Array(sig)).slice(0, 16)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
 export function constantTimeEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
   if (a.length !== b.length) return false;
@@ -62,6 +76,29 @@ export async function authenticateWithOAuth(request, env) {
   }
 
   return { ok: false };
+}
+
+export async function signAuthSession(env, payload) {
+  const data = JSON.stringify(payload);
+  const sig = await signWithPcpToken(env, data);
+  return btoa(`${data}.${sig}`);
+}
+
+export async function verifyAuthSession(env, token) {
+  if (!token) return null;
+  try {
+    const decoded = atob(token);
+    const dotIdx = decoded.lastIndexOf('.');
+    if (dotIdx === -1) return null;
+    const data = decoded.slice(0, dotIdx);
+    const sig = decoded.slice(dotIdx + 1);
+    const expected = await signWithPcpToken(env, data);
+    if (!constantTimeEqual(sig, expected)) return null;
+    const payload = JSON.parse(data);
+    return payload && typeof payload === 'object' ? payload : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function getAuthSession(env, authSessionId) {
