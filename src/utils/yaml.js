@@ -208,7 +208,7 @@ function extractInstructions(coreText) {
   if (data.tone.length > 0 || data.lexical_avoid.length > 0) {
     output.push('## Tone');
     for (const item of data.tone) output.push(`- ${item}`);
-    for (const item of data.lexical_avoid) output.push(`- 禁止: ${item}`);
+    for (const item of data.lexical_avoid) output.push(`- Avoid: ${item}`);
     output.push('');
   }
 

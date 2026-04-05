@@ -31,7 +31,7 @@ function html(body, status = 200) {
 
 function redirectPage(redirectUrl) {
   return html(`<!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -45,9 +45,9 @@ function redirectPage(redirectUrl) {
 </style>
 </head>
 <body>
-<h1>認証に成功しました</h1>
-<p>接続先へ戻っています。</p>
-<p>自動で遷移しない場合は、<a href="${escapeHtml(redirectUrl)}">こちらを開いて続行</a>してください。</p>
+<h1>Authentication Successful</h1>
+<p>Redirecting you back...</p>
+<p>If you are not redirected automatically, <a href="${escapeHtml(redirectUrl)}">click here to continue</a>.</p>
 <script>
 window.location.replace(${JSON.stringify(redirectUrl)});
 </script>
@@ -97,7 +97,7 @@ async function createAuthSession(env, { client_id, redirect_uri, state, code_cha
 
 function authorizePage(clientName, authSessionId, csrfToken, authSessionToken, errorMsg) {
   return html(`<!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -115,8 +115,8 @@ function authorizePage(clientName, authSessionId, csrfToken, authSessionToken, e
 </head>
 <body>
 <h1>Extended Mind</h1>
-<p><strong>${escapeHtml(clientName)}</strong> があなたのコンテキストへのアクセスを要求しています。</p>
-<p>アクセス権限: コンテキストの読み取り・書き込み</p>
+<p><strong>${escapeHtml(clientName)}</strong> is requesting access to your context.</p>
+<p>Permissions: Read and write your context</p>
 ${errorMsg ? `<div class="error">${escapeHtml(errorMsg)}</div>` : ''}
 <form method="POST" action="/oauth/authorize">
 <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">

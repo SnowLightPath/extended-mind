@@ -135,7 +135,7 @@ describe('OAuth authorize session fallback', () => {
 
     expect(postRes.status).toBe(200);
     const body = await postRes.text();
-    expect(body).toContain('認証に成功しました');
+    expect(body).toContain('Authentication Successful');
     const redirectMatch = body.match(/window\.location\.replace\("([^"]+)"\)/);
     expect(redirectMatch).toBeTruthy();
     const location = new URL(redirectMatch[1]);

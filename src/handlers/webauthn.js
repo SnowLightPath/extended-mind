@@ -225,11 +225,11 @@ export async function handleAuthBegin(request, env) {
 function passkeyManagePage() {
   return new Response(
     `<!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Extended Mind — パスキー管理</title>
+<title>Extended Mind — Passkey Management</title>
 <style>
   body { font-family: -apple-system, system-ui, sans-serif; max-width: 400px; margin: 80px auto; padding: 0 20px; color: #333; }
   h1 { font-size: 1.3em; }
@@ -245,17 +245,17 @@ function passkeyManagePage() {
 </style>
 </head>
 <body>
-<h1>Extended Mind — パスキー管理</h1>
+<h1>Extended Mind — Passkey Management</h1>
 <div id="step1">
-<p>PCP Token を入力してパスキーを登録します。</p>
+<p>Enter your PCP Token to register a passkey.</p>
 <label for="token">PCP Token</label>
 <input type="password" id="token" required placeholder="Enter your PCP token">
-<button class="btn" id="authBtn">認証</button>
+<button class="btn" id="authBtn">Authenticate</button>
 <div id="authError" class="error" style="display:none;margin-top:8px;"></div>
 </div>
 <div id="step2">
-<p>Touch ID でパスキーを登録します。</p>
-<button class="btn" id="registerBtn">パスキーを登録</button>
+<p>Register a passkey with Touch ID.</p>
+<button class="btn" id="registerBtn">Register Passkey</button>
 <div id="regMsg" style="display:none;margin-top:8px;"></div>
 </div>
 <script>
@@ -343,7 +343,7 @@ document.getElementById('registerBtn').addEventListener('click', async () => {
     const el = document.getElementById('regMsg');
     if (verifyRes.ok) {
       el.className = 'success';
-      el.textContent = 'パスキーを登録しました。次回から Touch ID でサインインできます。';
+      el.textContent = 'Passkey registered. You can sign in with Touch ID from now on.';
     } else {
       el.className = 'error';
       el.textContent = verifyData.error || 'Registration failed';
