@@ -29,6 +29,32 @@ function html(body, status = 200) {
   });
 }
 
+function redirectPage(redirectUrl) {
+  return html(`<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Extended Mind — Redirecting</title>
+<meta http-equiv="refresh" content="0;url=${escapeHtml(redirectUrl)}">
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 480px; margin: 80px auto; padding: 0 20px; color: #333; }
+  h1 { font-size: 1.3em; margin-bottom: 12px; }
+  p { color: #666; line-height: 1.5; }
+  a { color: #2563eb; }
+</style>
+</head>
+<body>
+<h1>認証に成功しました</h1>
+<p>接続先へ戻っています。</p>
+<p>自動で遷移しない場合は、<a href="${escapeHtml(redirectUrl)}">こちらを開いて続行</a>してください。</p>
+<script>
+window.location.replace(${JSON.stringify(redirectUrl)});
+</script>
+</body>
+</html>`);
+}
+
 function oauthError(error, description, status = 400) {
   return new Response(JSON.stringify({ error, error_description: description }), {
     status,
@@ -106,6 +132,14 @@ ${errorMsg ? `<div class="error">${escapeHtml(errorMsg)}</div>` : ''}
   const conditional = window.PublicKeyCredential.isConditionalMediationAvailable;
   if (!conditional || !(await conditional())) return;
 
+  const form = document.querySelector('form');
+  const abortController = new AbortController();
+  if (form) {
+    form.addEventListener('submit', () => {
+      abortController.abort();
+    }, { once: true });
+  }
+
   const authSessionId = document.querySelector('input[name="auth_session_id"]').value;
 
   const beginRes = await fetch('/oauth/authorize/webauthn/auth/begin', {
@@ -135,6 +169,7 @@ ${errorMsg ? `<div class="error">${escapeHtml(errorMsg)}</div>` : ''}
         timeout: beginData.timeout,
         userVerification: beginData.userVerification
       },
+      signal: abortController.signal,
       mediation: 'conditional'
     });
 
@@ -294,7 +329,7 @@ export async function handleAuthorizePost(request, env) {
   location.searchParams.set('code', code);
   if (authSession.state) location.searchParams.set('state', authSession.state);
 
-  return Response.redirect(location.toString(), 302);
+  return redirectPage(location.toString());
 }
 
 export async function handleToken(request, env) {

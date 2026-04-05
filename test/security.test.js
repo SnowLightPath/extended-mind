@@ -133,8 +133,12 @@ describe('OAuth authorize session fallback', () => {
       }),
     }), env);
 
-    expect(postRes.status).toBe(302);
-    const location = new URL(postRes.headers.get('Location'));
+    expect(postRes.status).toBe(200);
+    const body = await postRes.text();
+    expect(body).toContain('認証に成功しました');
+    const redirectMatch = body.match(/window\.location\.replace\("([^"]+)"\)/);
+    expect(redirectMatch).toBeTruthy();
+    const location = new URL(redirectMatch[1]);
     expect(location.origin + location.pathname).toBe(REDIRECT);
     expect(location.searchParams.get('state')).toBe('kv-miss');
     expect(location.searchParams.get('code')).toBeTruthy();
@@ -168,6 +172,25 @@ describe('OAuth authorize session fallback', () => {
 
     expect(postRes.status).toBe(400);
     expect(await postRes.text()).toContain('authorization link');
+  });
+});
+
+describe('OAuth authorize page behavior', () => {
+  it('aborts pending WebAuthn when the token form submits', async () => {
+    const CLIENT = 'authorize-form-client';
+    const REDIRECT = 'https://example.com/callback';
+    await env.PCP.put(`oauth:client:${CLIENT}`, JSON.stringify({
+      name: 'Authorize Form Client',
+      redirect_uris: [REDIRECT],
+    }));
+
+    const res = await handleAuthorizeGet(new URL(
+      `https://host/oauth/authorize?client_id=${CLIENT}&redirect_uri=${encodeURIComponent(REDIRECT)}&response_type=code`,
+    ), env);
+    const body = await res.text();
+    expect(body).toContain('const abortController = new AbortController();');
+    expect(body).toContain("form.addEventListener('submit'");
+    expect(body).toContain('signal: abortController.signal');
   });
 });
 
